@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
-import { Search, ArrowUpDown, Filter, Columns, Download, Maximize2, Minimize2, CornerDownRight } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Search, ArrowUpDown, SlidersHorizontal, Download, Maximize2, Minimize2, CornerDownRight, ChevronDown } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getAvatarColor } from "@/lib/utils/youtube";
-import { downloadCSV, downloadExcel, downloadJSON } from "@/lib/utils/export";
+import { downloadCSV, downloadExcel, downloadJSON, fetchAllCommentsForExport, recordExport } from "@/lib/utils/export";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,57 +19,60 @@ interface CommentExplorerProps {
   totalCount: number;
 }
 
+const PAGE_SIZE = 50;
+
+type SortOrder = "likes" | "newest" | "oldest";
+
 export function CommentExplorer({ jobId, videoTitle, totalCount }: CommentExplorerProps) {
   const [comments, setComments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [sortOrder, setSortOrder] = useState<SortOrder>("likes");
 
   useEffect(() => {
-    loadInitialComments();
-  }, [jobId]);
+    if (jobId) loadInitial();
+  }, [jobId, sortOrder]);
 
-  const loadInitialComments = async () => {
+  const buildQuery = (from: number, to: number) => {
+    const q = supabase.from("comments").select("*").eq("job_id", jobId);
+    if (sortOrder === "likes") return q.order("likes", { ascending: false }).range(from, to);
+    if (sortOrder === "newest") return q.order("published_at", { ascending: false }).range(from, to);
+    return q.order("published_at", { ascending: true }).range(from, to);
+  };
+
+  const loadInitial = async () => {
     try {
       setLoading(true);
-      // Mock fetch - assume comments table exists
-      const { data, error } = await supabase
-        .from('comments')
-        .select('*')
-        .eq('job_id', jobId)
-        .order('likes', { ascending: false })
-        .range(0, 49);
-
+      setComments([]);
+      setOffset(0);
+      setHasMore(true);
+      const { data, error } = await buildQuery(0, PAGE_SIZE - 1);
       if (error) throw error;
-      
-      // If no data returned (mock mode fallback)
-      if (!data || data.length === 0) {
-        setComments(generateMockComments());
-      } else {
-        setComments(data);
-      }
+      setComments(data ?? []);
+      setHasMore((data?.length ?? 0) === PAGE_SIZE);
+      setOffset(PAGE_SIZE);
     } catch (e) {
       console.error(e);
-      // Fallback for visual testing
-      setComments(generateMockComments());
     } finally {
       setLoading(false);
     }
   };
 
-  const generateMockComments = () => {
-    return Array.from({ length: 15 }).map((_, i) => ({
-      comment_id: `mock_${i}`,
-      author: `User ${Math.floor(Math.random() * 1000)}`,
-      text: "This is an incredible video. I really appreciate the detailed breakdown of the topic. The editing is also top notch. Keep up the great work! " + (Math.random() > 0.5 ? "Here is some more text to make this comment longer and require expansion." : ""),
-      likes: Math.floor(Math.random() * 5000),
-      reply_count: Math.floor(Math.random() * 50),
-      is_reply: Math.random() > 0.8,
-      published_at: new Date(Date.now() - Math.random() * 10000000000).toISOString()
-    }));
-  };
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const { data } = await buildQuery(offset, offset + PAGE_SIZE - 1);
+    setComments((prev) => [...prev, ...(data ?? [])]);
+    setHasMore((data?.length ?? 0) === PAGE_SIZE);
+    setOffset((prev) => prev + PAGE_SIZE);
+    setLoadingMore(false);
+  }, [offset, loadingMore, hasMore, sortOrder, jobId]);
 
   const toggleExpand = (id: string) => {
     const newSet = new Set(expandedRows);
@@ -78,80 +81,78 @@ export function CommentExplorer({ jobId, videoTitle, totalCount }: CommentExplor
     setExpandedRows(newSet);
   };
 
-  const filteredComments = comments.filter(c => 
-    !searchQuery || 
-    c.text?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    c.author?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredComments = searchQuery
+    ? comments.filter(
+        (c) =>
+          c.text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          c.author?.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : comments;
 
-  const handleExport = async (format: 'csv' | 'excel' | 'json') => {
-    toast.promise(
-      new Promise((resolve) => setTimeout(resolve, 1500)), // Simulate network delay
-      {
-        loading: `Preparing ${format.toUpperCase()} export...`,
-        success: () => {
-          if (format === 'csv') downloadCSV(filteredComments, 'ytscraper_export');
-          if (format === 'excel') downloadExcel(filteredComments, 'ytscraper_export');
-          if (format === 'json') downloadJSON(filteredComments, 'ytscraper_export', videoTitle);
-          return `Export complete`;
-        },
-        error: 'Export failed'
-      }
-    );
+  const handleExport = async (format: "csv" | "excel" | "json") => {
+    const label = format === "excel" ? "Excel" : format.toUpperCase();
+    const toastId = toast.loading(`Fetching all comments for ${label} export…`);
+    try {
+      const allComments = await fetchAllCommentsForExport(jobId);
+      const slug = videoTitle.replace(/[^a-z0-9]/gi, "_").slice(0, 40).toLowerCase();
+      if (format === "csv") downloadCSV(allComments, slug);
+      else if (format === "excel") downloadExcel(allComments, slug);
+      else downloadJSON(allComments, slug, videoTitle);
+      await recordExport(jobId, format === "excel" ? "xlsx" : format, allComments.length);
+      toast.success(`${allComments.length.toLocaleString()} comments exported as ${label}`, { id: toastId });
+    } catch (e: any) {
+      toast.error("Export failed: " + (e.message || "Unknown error"), { id: toastId });
+    }
   };
 
+  const sortLabel = sortOrder === "likes" ? "Top likes" : sortOrder === "newest" ? "Newest" : "Oldest";
+
   return (
-    <div className={`flex flex-col bg-card border border-border rounded-xl shadow-sm transition-all duration-300 ${isFullscreen ? 'fixed inset-4 z-50' : 'h-[650px]'}`}>
-      
+    <div className={`flex flex-col bg-card border border-border rounded-xl shadow-sm transition-all duration-300 ${isFullscreen ? "fixed inset-4 z-50" : "h-[650px]"}`}>
+
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 border-b border-border shrink-0 gap-3">
         <div className="min-w-0">
-          <h3 className="font-display font-bold text-foreground truncate">{videoTitle || 'Untitled Video'}</h3>
-          <p className="text-xs text-muted-foreground truncate mt-0.5">
-            {totalCount?.toLocaleString()} comments total
+          <h3 className="font-display font-bold text-foreground truncate">{videoTitle || "Untitled Video"}</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {loading ? "Loading…" : `${comments.length.toLocaleString()} loaded · ${totalCount.toLocaleString()} total`}
           </p>
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto pb-1 sm:pb-0">
-          <button 
+          <button
             onClick={() => setShowSearch(!showSearch)}
-            className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium ${showSearch ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}
+            className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium ${showSearch ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
           >
             <Search className="w-4 h-4" />
             <span className="hidden sm:inline">Search</span>
           </button>
-          
+
           <DropdownMenu>
             <DropdownMenuTrigger className="p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground outline-none">
               <ArrowUpDown className="w-4 h-4" />
-              <span className="hidden sm:inline">Sort</span>
+              <span className="hidden sm:inline">{sortLabel}</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem className="font-medium">Top likes</DropdownMenuItem>
-              <DropdownMenuItem disabled>Newest <span className="ml-auto text-[10px] bg-secondary px-1.5 rounded">soon</span></DropdownMenuItem>
-              <DropdownMenuItem disabled>Oldest <span className="ml-auto text-[10px] bg-secondary px-1.5 rounded">soon</span></DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSortOrder("likes")} className={sortOrder === "likes" ? "font-bold text-primary" : ""}>Top likes</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSortOrder("newest")} className={sortOrder === "newest" ? "font-bold text-primary" : ""}>Newest first</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSortOrder("oldest")} className={sortOrder === "oldest" ? "font-bold text-primary" : ""}>Oldest first</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-
-          <button className="p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground relative group">
-            <Filter className="w-4 h-4" />
-            <span className="hidden sm:inline">Filter</span>
-            <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-foreground text-background text-[10px] rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Coming soon</div>
-          </button>
 
           <DropdownMenu>
             <DropdownMenuTrigger className="p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground outline-none">
               <Download className="w-4 h-4" />
               <span className="hidden sm:inline text-primary">Export</span>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-32">
-              <DropdownMenuItem onClick={() => handleExport('csv')}>CSV</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExport('excel')}>Excel (.xlsx)</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExport('json')}>JSON</DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-36">
+              <DropdownMenuItem onClick={() => handleExport("csv")}>CSV</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("excel")}>Excel (.xlsx)</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("json")}>JSON</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <button 
+          <button
             onClick={() => setIsFullscreen(!isFullscreen)}
             className="p-2 rounded-lg transition-colors text-muted-foreground hover:bg-secondary hover:text-foreground hidden sm:block"
           >
@@ -164,9 +165,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount }: CommentExplor
       {showSearch && (
         <div className="px-4 py-2 border-b border-border bg-secondary/50 shrink-0 flex items-center gap-2">
           <Search className="w-4 h-4 text-muted-foreground" />
-          <input 
-            type="text" 
-            placeholder="Search by author or text..." 
+          <input
+            type="text"
+            placeholder="Search by author or text…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="flex-1 bg-transparent border-none outline-none text-sm placeholder:text-muted-foreground"
@@ -201,28 +202,29 @@ export function CommentExplorer({ jobId, videoTitle, totalCount }: CommentExplor
           ))
         ) : filteredComments.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8 text-center">
-            <Filter className="w-12 h-12 mb-4 opacity-20" />
-            <p>No comments found matching your criteria.</p>
+            <SlidersHorizontal className="w-12 h-12 mb-4 opacity-20" />
+            <p>{searchQuery ? "No comments matching your search." : "No comments found for this job."}</p>
           </div>
         ) : (
-          <div className="pb-4">
+          <div>
             {filteredComments.map((c) => {
-              const isExpanded = expandedRows.has(c.comment_id);
-              const initials = (c.author || '?').substring(0, 2).toUpperCase();
+              const isExpanded = expandedRows.has(c.comment_id || c.id);
+              const initials = (c.author || "?").substring(0, 2).toUpperCase();
+              const rowKey = c.comment_id || c.id;
               return (
-                <div 
-                  key={c.comment_id} 
-                  onClick={() => toggleExpand(c.comment_id)}
-                  className={`grid grid-cols-[32px_100px_160px_1fr_80px_70px] gap-4 px-4 py-3 border-b border-border/50 hover:bg-red-50/50 cursor-pointer transition-colors ${c.is_reply ? 'bg-secondary/30' : ''}`}
+                <div
+                  key={rowKey}
+                  onClick={() => toggleExpand(rowKey)}
+                  className={`grid grid-cols-[32px_100px_160px_1fr_80px_70px] gap-4 px-4 py-3 border-b border-border/50 hover:bg-red-50/50 cursor-pointer transition-colors ${c.is_reply ? "bg-secondary/30" : ""}`}
                 >
                   <div className="flex items-start pt-1 text-muted-foreground/40">
                     {c.is_reply && <CornerDownRight className="w-4 h-4 ml-2" />}
                   </div>
                   <div className="text-xs text-muted-foreground pt-1 truncate">
-                    {c.published_at ? formatDistanceToNow(new Date(c.published_at)) : 'N/A'}
+                    {c.published_at ? formatDistanceToNow(new Date(c.published_at), { addSuffix: false }) : "N/A"}
                   </div>
                   <div className="flex items-start gap-2 pt-0.5 truncate pr-2">
-                    <div 
+                    <div
                       className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 shadow-sm"
                       style={{ backgroundColor: getAvatarColor(c.author) }}
                     >
@@ -231,29 +233,48 @@ export function CommentExplorer({ jobId, videoTitle, totalCount }: CommentExplor
                     <span className="text-sm font-medium text-foreground truncate">{c.author}</span>
                   </div>
                   <div className="text-sm text-foreground pr-4 overflow-hidden">
-                    <p className={`whitespace-pre-wrap ${!isExpanded && 'line-clamp-2'}`}>
-                      {c.text}
-                    </p>
+                    <p className={`whitespace-pre-wrap ${!isExpanded ? "line-clamp-2" : ""}`}>{c.text}</p>
                   </div>
                   <div className="text-sm font-mono text-muted-foreground text-right pt-1">
-                    {c.likes?.toLocaleString()}
+                    {(c.likes ?? 0).toLocaleString()}
                   </div>
                   <div className="text-sm font-mono text-muted-foreground/60 text-right pt-1">
-                    {c.reply_count > 0 ? c.reply_count : '-'}
+                    {c.reply_count > 0 ? c.reply_count : "-"}
                   </div>
                 </div>
               );
             })}
+
+            {/* Load More */}
+            {!searchQuery && hasMore && (
+              <div className="py-4 text-center">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="flex items-center gap-2 mx-auto text-sm font-medium text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
+                >
+                  {loadingMore ? (
+                    <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                  {loadingMore ? "Loading…" : "Load more comments"}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
-      
+
       {/* Footer */}
       {!loading && (
         <div className="p-3 border-t border-border bg-secondary/30 text-xs text-center text-muted-foreground shrink-0">
-          Showing {filteredComments.length} of {totalCount?.toLocaleString()} comments
+          {searchQuery
+            ? `${filteredComments.length} matching · ${comments.length.toLocaleString()} loaded`
+            : `${comments.length.toLocaleString()} of ${totalCount.toLocaleString()} comments loaded`}
         </div>
       )}
     </div>
   );
 }
+

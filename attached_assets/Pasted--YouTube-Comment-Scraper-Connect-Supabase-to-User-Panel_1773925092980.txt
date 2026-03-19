@@ -1,0 +1,1170 @@
+# YouTube Comment Scraper — Connect Supabase to User Panel
+# Paste this entire prompt into Replit Agent
+# This prompt wires your existing Next.js user panel to your real Supabase backend
+
+---
+
+## CONTEXT — WHAT EXISTS ALREADY
+
+### Supabase project
+- URL: https://jxceenqmcyclbxaxvxto.supabase.co
+- Edge Function deployed at: https://jxceenqmcyclbxaxvxto.supabase.co/functions/v1/fetch-comments
+- Function name: fetch-comments (NOT scrape-comments — use this exact name everywhere)
+
+### Edge function behavior (CRITICAL — read carefully)
+The fetch-comments function works differently from a simple one-shot scrape.
+It uses a CHUNKED invocation model:
+
+1. First call: pass { videoUrl, maxComments, filters }
+   → Returns { done, nextPageToken, job_id, comment_count, credits_used, balance_after }
+
+2. If done=false: call AGAIN with { videoUrl, maxComments, filters, jobId, pageToken: nextPageToken }
+   → Repeats until done=true
+
+The frontend MUST loop these calls until done=true.
+Each call fetches up to 2,000 comments (PER_INVOCATION_LIMIT).
+So a 10,000 comment job requires ~5 chained calls from the frontend.
+
+### Edge function request body shape
+```typescript
+{
+  videoUrl:    string,          // full YouTube URL
+  maxComments: number | null,   // null = fetch ALL comments
+  filters: {
+    sortBy?:         "relevance" | "newest",
+    minLikes?:       number,
+    dateFrom?:       string,    // ISO date string
+    keyword?:        string,    // comma-separated keywords
+    includeReplies?: boolean,
+    maxComments?:    number,
+  },
+  jobId?:     string,           // only on 2nd+ calls (resume)
+  pageToken?: string,           // only on 2nd+ calls (from previous response)
+}
+```
+
+### Edge function response shape
+```typescript
+{
+  success:       boolean,
+  done:          boolean,         // true = all pages fetched
+  nextPageToken: string | null,   // null when done=true
+  job_id:        string,
+  video_title:   string,
+  channel_name:  string,
+  thumbnail:     string,
+  comment_count: number,          // ACCUMULATED total across all invocations
+  credits_used:  number,
+  balance_after: number,
+  cancelled:     boolean,
+}
+```
+
+### Error response for insufficient credits
+```typescript
+{
+  error:          "insufficient_credits",
+  message:        "Not enough credits. Please top up.",
+  balance:        number,
+  credits_needed: number | string,
+}
+```
+
+### Credit system
+- Credits are deducted PER COMMENT via atomic_credit_deduct() PostgreSQL function
+- 1 credit = 1 comment (NOT 1 credit = 1000 comments)
+- Balance = SUM of all rows in credit_ledger for user
+- source_type values allowed: "purchase" | "admin_grant" | "refund" | "job_reserve"
+- The edge function handles ALL credit deduction — frontend does NOT insert credit_ledger rows
+
+### Database tables (confirmed exist)
+- profiles, jobs, comments, credit_ledger, credit_packages
+- platform_settings (has key: free_plan_credits)
+- notifications, youtube_api_keys, exports
+- View: user_credit_balance → { user_id, balance }
+
+---
+
+## TASK
+
+Wire the existing Next.js user panel to this Supabase backend.
+Fix all Supabase client setup, environment variables, auth flow,
+and every data-fetching call across all pages.
+
+Do NOT rebuild pages from scratch. Fix and connect what exists.
+
+---
+
+## STEP 1 — ENVIRONMENT VARIABLES
+
+Add to Replit Secrets (and .env.local for local dev):
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://jxceenqmcyclbxaxvxto.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<your anon key from Supabase → Settings → API>
+NEXT_PUBLIC_APP_URL=https://your-replit-app-url.replit.app
+```
+
+The anon key starts with eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Get it from: Supabase dashboard → Project Settings → API → Project API keys → anon public
+
+---
+
+## STEP 2 — SUPABASE CLIENT FILES
+
+Create or overwrite these two files exactly:
+
+### lib/supabase/client.ts
+```typescript
+import { createBrowserClient } from '@supabase/ssr'
+
+export function createClient() {
+  return createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+}
+```
+
+### lib/supabase/server.ts
+```typescript
+import { createServerClient } from '@supabase/ssr'
+import { cookies } from 'next/headers'
+
+export function createClient() {
+  const cookieStore = cookies()
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          } catch {}
+        },
+      },
+    }
+  )
+}
+```
+
+### middleware.ts (root of project)
+```typescript
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+
+export async function middleware(request: NextRequest) {
+  let supabaseResponse = NextResponse.next({ request })
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          )
+          supabaseResponse = NextResponse.next({ request })
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          )
+        },
+      },
+    }
+  )
+
+  // Refresh session — MUST call getUser() not getSession()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  // Redirect unauthenticated users away from dashboard
+  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+
+  // Redirect authenticated users away from auth pages
+  if (
+    user &&
+    (request.nextUrl.pathname === '/login' ||
+     request.nextUrl.pathname === '/signup')
+  ) {
+    return NextResponse.redirect(new URL('/dashboard/scrape', request.url))
+  }
+
+  return supabaseResponse
+}
+
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
+}
+```
+
+---
+
+## STEP 3 — AUTH HOOK
+
+Create lib/hooks/useUser.ts — shared hook used by all client components:
+
+```typescript
+'use client'
+import { useEffect, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import type { User } from '@supabase/supabase-js'
+
+export function useUser() {
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
+  const supabase = createClient()
+
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      setUser(user)
+      setLoading(false)
+    }
+    getUser()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null)
+      }
+    )
+    return () => subscription.unsubscribe()
+  }, [])
+
+  return { user, loading }
+}
+```
+
+---
+
+## STEP 4 — CREDIT BALANCE HOOK
+
+Create lib/hooks/useCredits.ts:
+
+```typescript
+'use client'
+import { useEffect, useState, useCallback } from 'react'
+import { createClient } from '@/lib/supabase/client'
+
+export function useCredits(userId: string | undefined) {
+  const [balance, setBalance] = useState<number>(0)
+  const [loading, setLoading] = useState(true)
+  const supabase = createClient()
+
+  const fetchBalance = useCallback(async () => {
+    if (!userId) return
+    const { data } = await supabase
+      .from('user_credit_balance')
+      .select('balance')
+      .eq('user_id', userId)
+      .single()
+    setBalance(data?.balance ?? 0)
+    setLoading(false)
+  }, [userId])
+
+  useEffect(() => {
+    fetchBalance()
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchBalance, 30000)
+    return () => clearInterval(interval)
+  }, [fetchBalance])
+
+  return { balance, loading, refetch: fetchBalance }
+}
+```
+
+---
+
+## STEP 5 — LOGIN PAGE (/login)
+
+Replace any existing login logic with this exact implementation:
+
+```typescript
+'use client'
+import { createClient } from '@/lib/supabase/client'
+import { useRouter } from 'next/navigation'
+
+export default function LoginPage() {
+  const supabase = createClient()
+  const router = useRouter()
+
+  const handleEmailLogin = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) {
+      // Show error toast: error.message
+      return
+    }
+    router.push('/dashboard/scrape')
+    router.refresh()
+  }
+
+  const handleGoogleLogin = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+      },
+    })
+  }
+
+  const handleForgotPassword = async (email: string) => {
+    await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/reset-password`,
+    })
+    // Show toast: "Check your email for a reset link"
+  }
+
+  // ... render form using the above handlers
+}
+```
+
+---
+
+## STEP 6 — SIGNUP PAGE (/signup)
+
+```typescript
+'use client'
+import { createClient } from '@/lib/supabase/client'
+import { useRouter } from 'next/navigation'
+
+export default function SignupPage() {
+  const supabase = createClient()
+  const router = useRouter()
+
+  const handleSignup = async (fullName: string, email: string, password: string) => {
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: fullName },
+      },
+    })
+    if (error) {
+      // Show error toast
+      return
+    }
+    // Profile row is auto-created by handle_new_user() trigger in Supabase
+    // Signup credits are granted by the same trigger — no frontend action needed
+
+    // Read free credit amount dynamically to show in welcome toast
+    const { data: setting } = await supabase
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'free_plan_credits')
+      .single()
+    // Show toast: `🎉 Welcome! You have ${setting?.value ?? 'free'} credits to get started.`
+    // NEVER hardcode the number
+
+    // Store flag so we only show welcome toast once
+    localStorage.setItem('yt_welcome_shown', '1')
+
+    router.push('/dashboard/scrape')
+    router.refresh()
+  }
+
+  // ... render form
+}
+```
+
+Create the OAuth callback route at app/auth/callback/route.ts:
+```typescript
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+import { cookies } from 'next/headers'
+
+export async function GET(request: NextRequest) {
+  const { searchParams, origin } = new URL(request.url)
+  const code = searchParams.get('code')
+
+  if (code) {
+    const cookieStore = cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() { return cookieStore.getAll() },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          },
+        },
+      }
+    )
+    await supabase.auth.exchangeCodeForSession(code)
+  }
+
+  return NextResponse.redirect(`${origin}/dashboard/scrape`)
+}
+```
+
+---
+
+## STEP 7 — SCRAPE PAGE CORE LOGIC (/dashboard/scrape)
+
+This is the most important fix. The scrape page must use the CHUNKED INVOCATION
+pattern — calling fetch-comments repeatedly until done=true.
+
+### 7a. Active job detection on page load
+
+When the scrape page loads, check if there is already a running or queued job:
+```typescript
+const checkActiveJob = async (userId: string) => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('jobs')
+    .select('*')
+    .eq('user_id', userId)
+    .in('status', ['queued', 'running'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+  return data // null if no active job
+}
+```
+
+If an active job is found on page load: immediately show State B (progress card)
+and start polling that job.
+
+### 7b. The scrape invocation loop
+
+This is the core function that runs when user submits the form.
+It chains multiple edge function calls until done=true.
+
+```typescript
+const runScrapeJob = async ({
+  videoUrl,
+  maxComments,
+  filters,
+  onProgress,
+  onComplete,
+  onError,
+}: {
+  videoUrl:    string
+  maxComments: number | null
+  filters:     FetchFilters
+  onProgress:  (jobId: string, commentCount: number, creditsUsed: number) => void
+  onComplete:  (jobId: string, totalComments: number) => void
+  onError:     (message: string) => void
+}) => {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) { onError('Not authenticated'); return }
+
+  // Get the session access token to pass to the edge function
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) { onError('No session'); return }
+
+  let jobId: string | null = null
+  let pageToken: string | null = null
+  let totalComments = 0
+  let totalCreditsUsed = 0
+  let invocationCount = 0
+  const MAX_INVOCATIONS = 100 // safety cap: 100 × 2000 = 200,000 comments max
+
+  while (invocationCount < MAX_INVOCATIONS) {
+    invocationCount++
+
+    // Build request body
+    const body: Record<string, unknown> = {
+      videoUrl,
+      maxComments,
+      filters,
+    }
+    // On 2nd+ calls, pass jobId and pageToken to resume
+    if (jobId)    body.jobId     = jobId
+    if (pageToken) body.pageToken = pageToken
+
+    // Call the edge function directly via fetch
+    // (supabase.functions.invoke also works but fetch gives better error handling)
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/fetch-comments`,
+      {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey':        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        },
+        body: JSON.stringify(body),
+      }
+    )
+
+    const result = await response.json()
+
+    // Handle errors
+    if (!response.ok || result.error) {
+      if (result.error === 'insufficient_credits') {
+        onError(`Not enough credits. You need more credits to continue.`)
+        return
+      }
+      onError(result.error ?? result.message ?? 'Scraping failed')
+      return
+    }
+
+    // Update state from this invocation's response
+    jobId          = result.job_id
+    pageToken      = result.nextPageToken
+    totalComments  = result.comment_count   // accumulated total from edge function
+    totalCreditsUsed += result.credits_used
+
+    // Fire progress callback so UI updates
+    onProgress(jobId, totalComments, totalCreditsUsed)
+
+    // Stop if cancelled
+    if (result.cancelled) {
+      onError('Job was cancelled')
+      return
+    }
+
+    // Stop if all pages fetched
+    if (result.done) {
+      onComplete(jobId, totalComments)
+      return
+    }
+
+    // More pages remain — loop again with jobId + pageToken
+    // Small delay to avoid hammering (edge function has its own rate limiting)
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+
+  onError('Too many invocations — job may be very large. Check your jobs page.')
+}
+```
+
+### 7c. State management in the scrape page component
+
+```typescript
+type ScrapeState = 'idle' | 'running' | 'completed' | 'failed'
+
+// State variables:
+const [scrapeState, setScrapeState] = useState<ScrapeState>('idle')
+const [activeJobId, setActiveJobId] = useState<string | null>(null)
+const [activeJob, setActiveJob] = useState<Job | null>(null)
+const [liveCommentCount, setLiveCommentCount] = useState(0)
+const [liveCreditsUsed, setLiveCreditsUsed] = useState(0)
+const [isRunning, setIsRunning] = useState(false)
+const abortRef = useRef(false) // for cancel support
+
+// When user submits form:
+const handleSubmit = async (formData: ScrapeFormData) => {
+  if (isRunning) return
+  abortRef.current = false
+  setIsRunning(true)
+  setScrapeState('running')
+
+  await runScrapeJob({
+    videoUrl:    formData.videoUrl,
+    maxComments: formData.maxComments,
+    filters:     formData.filters,
+    onProgress: (jobId, commentCount, creditsUsed) => {
+      setActiveJobId(jobId)
+      setLiveCommentCount(commentCount)
+      setLiveCreditsUsed(creditsUsed)
+      // Fetch job row for video title/channel
+      fetchJobDetails(jobId)
+    },
+    onComplete: (jobId, total) => {
+      setActiveJobId(jobId)
+      setLiveCommentCount(total)
+      setScrapeState('completed')
+      setIsRunning(false)
+      toast.success(`✓ Scraped ${total.toLocaleString()} comments!`)
+    },
+    onError: (message) => {
+      setScrapeState('failed')
+      setIsRunning(false)
+      toast.error(message)
+    },
+  })
+}
+
+// Fetch job details (video title, channel etc.) from DB
+const fetchJobDetails = async (jobId: string) => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('jobs')
+    .select('*')
+    .eq('id', jobId)
+    .single()
+  if (data) setActiveJob(data)
+}
+```
+
+### 7d. Cancel job
+
+When user clicks "Cancel":
+```typescript
+const handleCancel = async () => {
+  if (!activeJobId) return
+  abortRef.current = true
+  const supabase = createClient()
+  await supabase
+    .from('jobs')
+    .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+    .eq('id', activeJobId)
+  setIsRunning(false)
+  setScrapeState('idle')
+  toast.info('Job cancelled.')
+  // Credits are NOT manually refunded here — the edge function handles credit
+  // deduction per-batch so only already-scraped comments were charged
+}
+```
+
+### 7e. Credit cost display in the form
+
+IMPORTANT: credits are 1 per comment (NOT 1 per 1000 comments).
+Fix any existing display that shows wrong math:
+
+```typescript
+// Cost = maxComments (1 credit per comment)
+// If maxComments = null (fetch all), show "~varies (1 credit per comment)"
+const creditCost = formData.maxComments ?? null
+const displayCost = creditCost
+  ? `${creditCost.toLocaleString()} credits`
+  : 'Credits charged per comment as scraped'
+
+// Balance check
+const hasEnoughCredits = creditCost ? balance >= creditCost : balance > 0
+```
+
+---
+
+## STEP 8 — PROGRESS CARD (State B)
+
+The progress card reads from the `activeJob` state (fetched from DB) combined
+with `liveCommentCount` (from edge function responses).
+
+```typescript
+// Progress percentage:
+// If job has requested_comments: use (liveCommentCount / requested_comments) * 100
+// If maxComments was null (fetch all): show indeterminate animation + "X scraped so far"
+const progressPercent = activeJob?.requested_comments
+  ? Math.min(100, Math.round((liveCommentCount / activeJob.requested_comments) * 100))
+  : null // null = indeterminate
+
+// Display in progress card:
+// "{liveCommentCount.toLocaleString()} comments scraped"
+// If requested_comments exists: "of {requested_comments.toLocaleString()} requested"
+// Credits used so far: "{liveCreditsUsed.toLocaleString()} credits used"
+// Video: activeJob?.video_title ?? "Fetching video info..."
+// Channel: activeJob?.channel_name
+```
+
+---
+
+## STEP 9 — COMMENT EXPLORER (State C + /dashboard/jobs/[id])
+
+Wire the comment explorer to load from Supabase:
+
+```typescript
+// lib/hooks/useComments.ts
+'use client'
+import { useState, useCallback } from 'react'
+import { createClient } from '@/lib/supabase/client'
+
+const PAGE_SIZE = 50
+
+export function useComments(jobId: string | null) {
+  const [comments, setComments] = useState<Comment[]>([])
+  const [loading, setLoading] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [offset, setOffset] = useState(0)
+  const supabase = createClient()
+
+  const loadInitial = useCallback(async () => {
+    if (!jobId) return
+    setLoading(true)
+    setComments([])
+    setOffset(0)
+    const { data } = await supabase
+      .from('comments')
+      .select('*')
+      .eq('job_id', jobId)
+      .order('likes', { ascending: false })
+      .range(0, PAGE_SIZE - 1)
+    setComments(data ?? [])
+    setHasMore((data?.length ?? 0) === PAGE_SIZE)
+    setOffset(PAGE_SIZE)
+    setLoading(false)
+  }, [jobId])
+
+  const loadMore = useCallback(async () => {
+    if (!jobId || loading || !hasMore) return
+    setLoading(true)
+    const { data } = await supabase
+      .from('comments')
+      .select('*')
+      .eq('job_id', jobId)
+      .order('likes', { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1)
+    setComments(prev => [...prev, ...(data ?? [])])
+    setHasMore((data?.length ?? 0) === PAGE_SIZE)
+    setOffset(prev => prev + PAGE_SIZE)
+    setLoading(false)
+  }, [jobId, offset, loading, hasMore])
+
+  return { comments, loading, hasMore, loadInitial, loadMore }
+}
+```
+
+Client-side search (filter already-loaded comments):
+```typescript
+const [searchQuery, setSearchQuery] = useState('')
+const filteredComments = searchQuery
+  ? comments.filter(c =>
+      c.text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.author?.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+  : comments
+```
+
+---
+
+## STEP 10 — EXPORT FUNCTIONS
+
+Wire export to fetch ALL comments then download client-side.
+Comments are 1 credit per comment — exports are free (data already scraped).
+
+```typescript
+// lib/utils/export.ts
+import { createClient } from '@/lib/supabase/client'
+
+export const fetchAllCommentsForExport = async (jobId: string) => {
+  const supabase = createClient()
+  const all: any[] = []
+  let offset = 0
+  while (true) {
+    const { data } = await supabase
+      .from('comments')
+      .select('*')
+      .eq('job_id', jobId)
+      .order('likes', { ascending: false })
+      .range(offset, offset + 999)
+    if (!data || data.length === 0) break
+    all.push(...data)
+    if (data.length < 1000) break
+    offset += 1000
+  }
+  return all
+}
+
+export const downloadCSV = (comments: any[], filename: string) => {
+  const headers = ['Published','Author','Author Channel','Comment','Likes','Reply Count','Is Reply','Parent ID']
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const rows = comments.map(c => [
+    c.published_at ? new Date(c.published_at).toISOString() : '',
+    esc(c.author), esc(c.author_channel), esc(c.text),
+    c.likes ?? 0, c.reply_count ?? 0,
+    c.is_reply ? 'true' : 'false', c.parent_id ?? '',
+  ].join(','))
+  const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${filename}_comments.csv`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+export const downloadJSON = (comments: any[], filename: string, videoTitle: string) => {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    video_title: videoTitle,
+    total: comments.length,
+    comments: comments.map(c => ({
+      id: c.comment_id, author: c.author,
+      author_channel: c.author_channel, text: c.text,
+      likes: c.likes, reply_count: c.reply_count,
+      is_reply: c.is_reply, parent_id: c.parent_id ?? null,
+      published_at: c.published_at,
+    }))
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${filename}_comments.json`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+```
+
+For Excel, use SheetJS (already installed as `xlsx`):
+```typescript
+import * as XLSX from 'xlsx'
+export const downloadExcel = (comments: any[], filename: string) => {
+  const rows = comments.map(c => ({
+    'Published':      c.published_at ? new Date(c.published_at).toLocaleDateString() : '',
+    'Author':         c.author ?? '',
+    'Author Channel': c.author_channel ?? '',
+    'Comment':        c.text ?? '',
+    'Likes':          c.likes ?? 0,
+    'Reply Count':    c.reply_count ?? 0,
+    'Is Reply':       c.is_reply ? 'Yes' : 'No',
+    'Parent ID':      c.parent_id ?? '',
+  }))
+  const ws = XLSX.utils.json_to_sheet(rows)
+  ws['!cols'] = [{ wch:14 },{ wch:25 },{ wch:35 },{ wch:80 },{ wch:8 },{ wch:12 },{ wch:10 },{ wch:22 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Comments')
+  XLSX.writeFile(wb, `${filename}_comments.xlsx`)
+}
+```
+
+After every export, record it in the DB:
+```typescript
+const supabase = createClient()
+const { data: { user } } = await supabase.auth.getUser()
+await supabase.from('exports').insert({
+  job_id: jobId,
+  user_id: user!.id,
+  format,       // 'csv' | 'json' | 'xlsx'
+  status: 'ready',
+  row_count: comments.length,
+})
+```
+
+---
+
+## STEP 11 — JOBS LIST PAGE (/dashboard/jobs)
+
+```typescript
+// Fetch jobs for the logged-in user
+const fetchJobs = async (page = 0) => {
+  const supabase = createClient()
+  const PAGE_SIZE = 20
+  const { data, count } = await supabase
+    .from('jobs')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+  return { jobs: data ?? [], total: count ?? 0 }
+}
+// Note: RLS automatically filters to the logged-in user's jobs only
+// Do NOT add .eq('user_id', ...) — RLS handles it
+
+// Stats for the stats cards:
+const fetchJobStats = async () => {
+  const supabase = createClient()
+  // Total jobs
+  const { count: totalJobs } = await supabase
+    .from('jobs').select('*', { count: 'exact', head: true })
+
+  // Total comments scraped
+  const { data: commentStats } = await supabase
+    .from('jobs')
+    .select('downloaded_comments')
+    .eq('status', 'completed')
+
+  const totalComments = commentStats?.reduce((sum, j) => sum + (j.downloaded_comments ?? 0), 0) ?? 0
+
+  // Credits spent (absolute value of negative ledger entries)
+  const { data: creditData } = await supabase
+    .from('credit_ledger')
+    .select('amount')
+    .lt('amount', 0)
+
+  const creditsSpent = Math.abs(
+    creditData?.reduce((sum, r) => sum + r.amount, 0) ?? 0
+  )
+
+  return { totalJobs, totalComments, creditsSpent }
+}
+
+// Retry a failed job:
+const retryJob = async (job: Job) => {
+  const supabase = createClient()
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) return
+
+  // Reset job status
+  await supabase.from('jobs').update({
+    status: 'queued',
+    error_message: null,
+    retry_count: (job.retry_count ?? 0) + 1,
+    progress: 0,
+    downloaded_comments: 0,
+    started_at: null,
+    completed_at: null,
+  }).eq('id', job.id)
+
+  // Re-invoke edge function (fresh call, same job ID)
+  await fetch(
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/fetch-comments`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      },
+      body: JSON.stringify({
+        videoUrl: job.video_url,
+        maxComments: job.requested_comments,
+        filters: job.filters ?? {},
+        jobId: job.id,
+      }),
+    }
+  )
+  toast.success('Job restarted!')
+}
+```
+
+---
+
+## STEP 12 — CREDITS PAGE (/dashboard/credits)
+
+```typescript
+// Credit balance (from view)
+const fetchBalance = async () => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('user_credit_balance')
+    .select('balance')
+    .single()
+  return data?.balance ?? 0
+}
+
+// Free signup credit amount — READ DYNAMICALLY, NEVER HARDCODE
+const fetchFreeCredits = async () => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('platform_settings')
+    .select('value')
+    .eq('key', 'free_plan_credits')
+    .single()
+  return data?.value ?? '...'
+  // Display as: `New users get ${freeCredits} free credits on signup`
+}
+
+// Credit packages
+const fetchPackages = async () => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('credit_packages')
+    .select('*')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+  return data ?? []
+}
+
+// Credit history
+const fetchCreditHistory = async () => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('credit_ledger')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50)
+  return data ?? []
+  // RLS auto-filters to current user
+}
+```
+
+---
+
+## STEP 13 — SETTINGS PAGE (/dashboard/settings)
+
+```typescript
+// Load profile
+const fetchProfile = async () => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('profiles')
+    .select('*')
+    .single()
+  return data
+  // RLS: returns only the logged-in user's profile
+}
+
+// Update profile
+const updateProfile = async (updates: { full_name?: string; timezone?: string; locale?: string }) => {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  const { error } = await supabase
+    .from('profiles')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', user!.id)
+  if (error) throw error
+}
+
+// Change password
+const changePassword = async (newPassword: string) => {
+  const supabase = createClient()
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) throw error
+}
+```
+
+---
+
+## STEP 14 — NOTIFICATIONS
+
+```typescript
+// Unread count for the bell badge
+const fetchUnreadCount = async () => {
+  const supabase = createClient()
+  const { count } = await supabase
+    .from('notifications')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_read', false)
+  return count ?? 0
+}
+
+// Latest notifications for dropdown
+const fetchNotifications = async () => {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('notifications')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(5)
+  return data ?? []
+}
+
+// Mark single notification as read
+const markRead = async (notificationId: string) => {
+  const supabase = createClient()
+  await supabase
+    .from('notifications')
+    .update({ is_read: true, read_at: new Date().toISOString() })
+    .eq('id', notificationId)
+}
+
+// Mark all as read
+const markAllRead = async () => {
+  const supabase = createClient()
+  await supabase
+    .from('notifications')
+    .update({ is_read: true, read_at: new Date().toISOString() })
+    .eq('is_read', false)
+}
+```
+
+---
+
+## STEP 15 — ANNOUNCEMENTS BANNER
+
+```typescript
+const fetchAnnouncements = async () => {
+  const supabase = createClient()
+  const now = new Date().toISOString()
+  const { data } = await supabase
+    .from('announcements')
+    .select('*')
+    .eq('is_active', true)
+    .in('target_audience', ['all'])
+    .or(`show_from.is.null,show_from.lte.${now}`)
+    .or(`show_until.is.null,show_until.gte.${now}`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+  return data
+}
+
+// Dismiss: store in localStorage so it doesn't re-appear
+// Key: `dismissed_announcement_${announcement.id}`
+```
+
+---
+
+## STEP 16 — LOGOUT
+
+```typescript
+const handleLogout = async () => {
+  const supabase = createClient()
+  await supabase.auth.signOut()
+  router.push('/login')
+  router.refresh()
+}
+```
+
+---
+
+## STEP 17 — IMPORTANT BUGS TO FIX
+
+Fix these specific issues across the codebase:
+
+### Bug 1: Wrong credit math
+The system charges 1 credit per COMMENT (not per 1000).
+Find and fix any code that shows or calculates:
+- `Math.ceil(commentCount / 1000)` → replace with just `commentCount`
+- "1 credit = 1,000 comments" → replace with "1 credit = 1 comment"
+- Any display of credit cost that divides by 1000
+
+### Bug 2: Wrong edge function name
+Find and replace ALL occurrences of:
+- `scrape-comments` → `fetch-comments`
+- `supabase.functions.invoke('scrape-comments'` → use fetch() directly (see Step 7b)
+
+### Bug 3: Single-shot edge function call
+Find any code that calls the edge function ONCE and waits for it.
+Replace with the runScrapeJob() loop from Step 7b that chains calls until done=true.
+
+### Bug 4: Manual credit deduction in frontend
+Find and REMOVE any code that inserts into credit_ledger from the frontend.
+The edge function handles ALL credit deduction via atomic_credit_deduct().
+Frontend should NEVER insert into credit_ledger directly.
+
+### Bug 5: Hardcoded credit amounts
+Find and replace any hardcoded numbers like `500` used as "signup credits".
+Replace with dynamic fetch from platform_settings WHERE key='free_plan_credits'.
+
+### Bug 6: Missing apikey header
+When calling the edge function via fetch(), BOTH headers are required:
+```typescript
+headers: {
+  'Content-Type':  'application/json',
+  'Authorization': `Bearer ${session.access_token}`,  // user JWT
+  'apikey':        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,  // required by Supabase
+}
+```
+If the apikey header is missing, the edge function returns 401.
+
+---
+
+## STEP 18 — PACKAGES TO ENSURE ARE INSTALLED
+
+```bash
+npm install @supabase/supabase-js @supabase/ssr
+npm install xlsx
+npm install sonner
+npm install date-fns
+```
+
+---
+
+## STEP 19 — VERIFICATION CHECKLIST
+
+After making all changes, verify these work:
+
+1. [ ] Visit /login → email login works → redirects to /dashboard/scrape
+2. [ ] Visit /signup → creates account → welcome toast shows FREE CREDIT AMOUNT from DB (not hardcoded)
+3. [ ] Credit balance shows in top bar (from user_credit_balance view)
+4. [ ] Paste YouTube URL → options slide in → credit cost shows (1 credit per comment)
+5. [ ] Click Scrape Now → edge function called → progress updates live
+6. [ ] Job with 5,000 comments: verify multiple edge function calls happen (check browser network tab — should see multiple POST requests to fetch-comments)
+7. [ ] After completion → Comment Explorer shows comments
+8. [ ] Export CSV → downloads file with correct data
+9. [ ] Export Excel → downloads .xlsx file
+10. [ ] Export JSON → downloads .json file
+11. [ ] /dashboard/jobs → shows job list
+12. [ ] Click "View Comments" → /dashboard/jobs/[id] → Comment Explorer loads
+13. [ ] /dashboard/credits → shows balance + packages + history
+14. [ ] /dashboard/settings → loads profile → save works
+15. [ ] Logout → redirects to /login
