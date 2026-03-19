@@ -1,0 +1,804 @@
+# YouTube Comment Scraper — Full Admin Panel
+# Replit Prompt — Copy and paste this entire prompt into Replit Agent
+# Also attach your yt_scraper_supabase.sql file for full schema context
+
+---
+
+## PROJECT OVERVIEW
+
+Build a complete **Admin Panel** for the YouTube Comment Scraper SaaS.
+
+The user dashboard already exists at `https://example.com/dashboard` (separate project).
+The admin panel lives at `https://example.com/admin` and all sub-routes under `/admin/*`.
+
+This is a **separate Next.js project** — do NOT mix with the user dashboard.
+The root URL `/` should redirect to `/admin/login`.
+
+The admin has **full control** over: users, plans, credits, jobs, payments,
+YouTube API keys, platform settings, announcements, IP blocklist, and audit logs.
+
+---
+
+## TECH STACK
+
+- **Framework**: Next.js 14 with App Router (TypeScript)
+- **Database**: Supabase — same project as user panel, use SERVICE ROLE KEY only
+- **Styling**: Tailwind CSS + shadcn/ui
+- **Icons**: lucide-react
+- **Tables**: @tanstack/react-table
+- **Charts**: recharts
+- **Forms**: react-hook-form + zod
+- **Toasts**: sonner
+- **Dates**: date-fns
+- **Auth**: Custom JWT auth using `admin_users` table (NOT Supabase Auth)
+- **Password hashing**: bcryptjs
+- **JWT**: jsonwebtoken
+
+---
+
+## ENVIRONMENT VARIABLES
+
+Create `.env.local`:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+ADMIN_JWT_SECRET=a_random_secret_min_32_characters_long
+NEXT_PUBLIC_ADMIN_URL=https://example.com/admin
+```
+
+CRITICAL: Use ONLY the service role key — never the anon key.
+All Supabase calls must be server-side only (Route Handlers or Server Actions).
+Never expose the service role key to the browser.
+
+---
+
+## DATABASE SCHEMA — KEY TABLES
+
+The Supabase database is already set up. Here are all tables the admin panel uses:
+
+### `admin_users`
+`id` (UUID PK), `email` (unique), `full_name`, `avatar_url`, `role_id` (FK→admin_roles),
+`password_hash` (bcrypt), `totp_secret`, `is_2fa_enabled` (bool), `is_active` (bool),
+`deactivated_at`, `deactivated_by` (FK→admin_users), `last_login_at`, `last_login_ip`,
+`created_at`, `updated_at`, `created_by` (FK→admin_users)
+
+### `admin_roles`
+`id`, `name` (super_admin | support_admin | billing_admin), `description`
+Permission booleans: `can_view_users`, `can_suspend_users`, `can_delete_users`,
+`can_change_user_plan`, `can_add_credits`, `can_view_payments`, `can_issue_refunds`,
+`can_manage_plans`, `can_view_jobs`, `can_kill_jobs`, `can_manage_api_keys`,
+`can_edit_settings`, `can_manage_announcements`, `can_manage_ip_blocklist`,
+`can_manage_admins`, `can_view_audit_log`
+
+### `admin_audit_log`
+`id`, `admin_id` (FK→admin_users), `action` (text), `target_type` (text), `target_id` (UUID),
+`before_value` (JSONB), `after_value` (JSONB), `ip_address`, `user_agent`, `notes`, `created_at`
+
+### `profiles` (user accounts)
+`id` (matches auth.users.id), `email`, `full_name`, `avatar_url`, `current_plan_id`,
+`current_subscription_id`, `account_status` (active|suspended|deleted), `is_suspended`,
+`suspended_reason`, `suspended_at`, `suspended_by`, `timezone`, `locale`,
+`created_at`, `updated_at`, `last_login_at`, `last_job_created_at`, `deleted_at`
+
+### `plans`
+`id`, `name`, `description`, `credits_per_month`, `price_monthly`, `price_yearly`,
+`stripe_price_id_monthly`, `stripe_price_id_yearly`, `razorpay_plan_id_monthly`,
+`razorpay_plan_id_yearly`, `is_active`, `is_visible`, `created_at`, `updated_at`
+
+### `subscriptions`
+`id`, `user_id`, `plan_id`, `status` (active|trialing|past_due|cancelled|paused),
+`billing_cycle` (monthly|yearly), `stripe_subscription_id`, `stripe_customer_id`,
+`razorpay_subscription_id`, `current_period_start`, `current_period_end`,
+`cancel_at_period_end`, `cancelled_at`, `cancellation_reason`, `created_at`
+
+### `credit_ledger` (append-only)
+`id`, `user_id`, `amount` (int, positive=credit negative=debit), `source_type`
+(purchase|subscription_renewal|job_reserve|job_settle|job_cancel_refund|
+admin_grant|admin_deduct|referral_bonus|refund|signup_bonus),
+`source_id`, `description`, `balance_after`, `created_at`
+View: `user_credit_balance` → `{ user_id, balance, total_credit_events, total_debit_events }`
+
+### `credit_packages`
+`id`, `name`, `description`, `credits_amount`, `price`, `currency` (USD),
+`stripe_price_id`, `razorpay_plan_id`, `is_active`, `sort_order`, `created_at`, `updated_at`
+
+### `package_purchases`
+`id`, `user_id`, `package_id`, `credits_total`, `price_paid`, `currency`,
+`payment_status` (pending|completed|failed|refunded), `payment_provider` (stripe|razorpay|paypal),
+`stripe_payment_intent_id`, `razorpay_order_id`, `razorpay_payment_id`, `created_at`, `completed_at`
+
+### `payment_transactions`
+`id`, `purchase_id`, `subscription_id`, `user_id`, `provider`, `provider_event_id`,
+`event_type` (charge.succeeded|charge.failed|refund.created|dispute.created|
+subscription.renewed|subscription.cancelled), `amount`, `currency`, `status`, `raw_payload` (JSONB), `created_at`
+
+### `jobs`
+`id`, `user_id`, `job_type` (single_video|bulk|scheduled|channel), `video_url`, `video_id`,
+`video_title`, `channel_name`, `channel_id`, `thumbnail`, `view_count`, `like_count`,
+`comment_count`, `requested_comments`, `downloaded_comments`, `credits_reserved`, `credits_used`,
+`status` (queued|running|completed|failed|cancelled|paused), `progress` (0-100),
+`filters` (JSONB), `next_page_token`, `pages_processed`, `queue_job_id`, `worker_id`,
+`error_message`, `retry_count`, `scheduled_job_id`, `created_at`, `started_at`, `completed_at`
+
+### `comments`
+`id`, `job_id`, `comment_id`, `author`, `author_channel`, `author_channel_id`,
+`text`, `text_original`, `likes`, `reply_count`, `is_reply`, `parent_id`,
+`sentiment` (positive|negative|neutral), `sentiment_score`, `is_spam`, `language`,
+`topics` (JSONB), `published_at`, `created_at`
+
+### `youtube_api_keys`
+`id`, `key_value`, `label`, `quota_used`, `quota_limit`, `quota_used_pct` (computed column),
+`error_count`, `consecutive_errors`, `is_active`, `is_paused`, `last_used_at`,
+`last_reset_at`, `last_error_at`, `last_error_msg`, `created_at`, `updated_at`
+
+### `platform_settings`
+`key` (PK text), `value` (text), `description`, `updated_by` (UUID), `updated_at`
+Default rows: maintenance_mode, new_signups_enabled, max_job_comments, free_plan_credits, credit_cost_per_1000
+
+### `ip_blocklist`
+`id`, `ip_address`, `ip_range`, `reason` (abuse|spam|brute_force|scraping_abuse|manual),
+`blocked_by` (FK→admin_users), `user_id` (FK→profiles, optional), `is_active`,
+`expires_at`, `created_at`, `updated_at`
+
+### `announcements`
+`id`, `title`, `body`, `type` (info|warning|success|danger),
+`target_audience` (all|free|starter|pro|agency), `placement` (banner|modal|dashboard|email),
+`cta_label`, `cta_url`, `is_dismissable`, `is_active`, `show_from`, `show_until`,
+`created_by` (FK→admin_users), `updated_by`, `created_at`, `updated_at`
+
+### `notifications`
+`id`, `user_id`, `type`, `title`, `body`, `action_url`, `channel`, `is_read`, `read_at`, `sent_at`, `created_at`
+
+### `security_events`
+`id`, `user_id`, `event_type`, `description`, `ip_address`, `device_name`, `metadata` (JSONB), `created_at`
+
+### `user_sessions`
+`id`, `user_id`, `session_token_hash`, `device_type`, `device_name`, `browser`, `os`,
+`ip_address`, `country`, `city`, `is_active`, `created_at`, `last_activity_at`, `logged_out_at`, `expires_at`
+
+---
+
+## ADMIN AUTHENTICATION SYSTEM
+
+Admins use the `admin_users` table — completely separate from Supabase Auth.
+
+### Login flow:
+1. POST `/api/admin/auth/login` with `{ email, password }`
+2. Look up `admin_users` by email
+3. Verify password with `bcrypt.compare(password, admin.password_hash)`
+4. Check `admin.is_active === true`
+5. Load role from `admin_roles` WHERE `id = admin.role_id`
+6. Sign JWT: `jwt.sign({ adminId, email, roleId, roleName, permissions: {...all can_* booleans} }, ADMIN_JWT_SECRET, { expiresIn: '8h' })`
+7. Set httpOnly cookie `admin_token` with the JWT (sameSite: strict, secure: true)
+8. Update `admin_users.last_login_at = NOW()`, `last_login_ip` from request
+9. Log to `admin_audit_log`: action `admin.login`
+10. Return `{ success: true }`
+
+### Middleware protection:
+Every `/admin/*` route except `/admin/login` must:
+1. Read `admin_token` cookie
+2. Verify with `jwt.verify(token, ADMIN_JWT_SECRET)`
+3. If missing/invalid/expired: redirect to `/admin/login`
+4. Attach decoded admin payload to request headers for use in server components
+
+### Permission guard helper:
+```typescript
+// lib/check-permission.ts
+export function requirePermission(
+  adminPermissions: Record<string, boolean>,
+  permission: keyof typeof adminPermissions
+) {
+  if (!adminPermissions[permission]) {
+    throw new Error(`Forbidden: missing permission ${permission}`)
+  }
+}
+```
+
+### Create first super admin script:
+Create `scripts/seed-admin.ts`:
+- Hash password `Admin@123456` with bcrypt (salt rounds: 12)
+- Insert into `admin_users` with role_id of super_admin
+- Email: `admin@yourdomain.com`
+- Print instructions to change password after first login
+
+---
+
+## AUDIT LOGGER UTILITY (use on EVERY write action)
+
+```typescript
+// lib/audit.ts
+import { createSupabaseAdmin } from './supabase-admin'
+
+export async function logAdminAction(params: {
+  adminId: string
+  action: string
+  targetType?: string
+  targetId?: string
+  beforeValue?: object
+  afterValue?: object
+  ipAddress?: string
+  userAgent?: string
+  notes?: string
+}) {
+  const supabase = createSupabaseAdmin()
+  await supabase.from('admin_audit_log').insert({
+    admin_id: params.adminId,
+    action: params.action,
+    target_type: params.targetType ?? null,
+    target_id: params.targetId ?? null,
+    before_value: params.beforeValue ?? {},
+    after_value: params.afterValue ?? {},
+    ip_address: params.ipAddress ?? null,
+    user_agent: params.userAgent ?? null,
+    notes: params.notes ?? null,
+  })
+}
+```
+
+Actions to log (use these exact strings):
+`admin.login`, `admin.logout`, `admin.create`, `admin.deactivate`, `admin.role_change`
+`user.view`, `user.suspend`, `user.unsuspend`, `user.delete`, `user.plan_change`,
+`user.credits_add`, `user.credits_deduct`, `user.force_logout`
+`job.view`, `job.kill`, `job.retry`
+`payment.refund`, `payment.view`
+`api_key.add`, `api_key.pause`, `api_key.resume`, `api_key.reset`, `api_key.delete`
+`settings.update`, `announcement.create`, `announcement.update`, `announcement.delete`, `announcement.toggle`
+`ip.block`, `ip.unblock`
+`plans.create`, `plans.update`, `package.create`, `package.update`, `package.delete`
+
+---
+
+## DESIGN SYSTEM
+
+**Sidebar**: Dark `#0F0F14`, 240px fixed width. White text. Active item: indigo left border + indigo-50 background.
+**Main content**: Light gray `#F4F4F8` background. White cards with subtle border `#E5E7EB`.
+**Accent color**: Indigo `#6366F1` — primary buttons, active nav, links.
+**Font**: Geist Sans (Next.js default).
+**Data density**: Compact — 13px font in table rows, 12px for metadata. Admins are power users.
+**Status badge colors** (consistent everywhere):
+  - active / completed / success → green
+  - pending / queued → amber
+  - failed / suspended / blocked / error → red
+  - running / processing → blue with animated pulse dot
+  - cancelled / paused / inactive / expired → gray
+  - trialing → purple
+
+---
+
+## PAGE-BY-PAGE SPECIFICATIONS
+
+---
+
+### PAGE 1: Login `/admin/login`
+
+- Centered card on dark background
+- Shield icon + "Admin Panel" heading
+- Email + password fields (no Google/OAuth)
+- Submit → POST `/api/admin/auth/login`
+- On success: redirect to `/admin/overview`
+- Show error: "Invalid credentials" or "Your account has been deactivated"
+- No "forgot password" link (admins contact super admin)
+
+---
+
+### PAGE 2: Overview `/admin/overview`
+
+**6 stat cards (top row):**
+1. Total users → `SELECT COUNT(*) FROM profiles WHERE deleted_at IS NULL`
+2. Active subscriptions → `SELECT COUNT(*) FROM subscriptions WHERE status = 'active'`
+3. Jobs today → `SELECT COUNT(*) FROM jobs WHERE created_at >= CURRENT_DATE`
+4. Running jobs → `SELECT COUNT(*) FROM jobs WHERE status = 'running'` (live via Supabase Realtime)
+5. Revenue this month → `SELECT COALESCE(SUM(price_paid),0) FROM package_purchases WHERE payment_status='completed' AND created_at >= date_trunc('month', NOW())`
+6. New signups today → `SELECT COUNT(*) FROM profiles WHERE created_at >= CURRENT_DATE`
+
+**Charts (recharts):**
+- Left: Bar chart — "Signups last 30 days" — group `profiles` by `created_at::date`
+- Right: Line chart — "Jobs per day last 14 days" — group `jobs` by `created_at::date`
+
+**System health panel:**
+- Active YouTube API keys: count where `is_active=true AND is_paused=false`
+- Keys in error: count where `consecutive_errors >= 3`
+- If any key has `consecutive_errors >= 5`: show red alert banner "⚠ API keys failing"
+- If `platform_settings.maintenance_mode = 'true'`: show yellow banner "⚠ Maintenance mode is ON"
+
+**Two bottom tables:**
+- Recent users (last 10, with email, plan, status, joined date, View button)
+- Recent jobs (last 10, with video title, user email, status badge, View button)
+
+---
+
+### PAGE 3: Users `/admin/users`
+
+Server-side paginated table. 25 rows per page.
+
+**Filters:**
+- Search: ILIKE on `email` and `full_name`
+- Status: All | Active | Suspended | Deleted
+- Plan: dropdown from `plans` table
+- Joined: date range
+- Sort: Newest | Oldest | Most jobs | Alphabetical
+
+**Table columns:**
+- Checkbox (for bulk actions)
+- Avatar (initials fallback) + Full name + Email
+- Plan name (JOIN plans on current_plan_id)
+- Status badge
+- Credit balance (from `user_credit_balance` view)
+- Jobs count (subquery COUNT from jobs)
+- Joined date
+- Last login
+- Actions: View | Suspend/Unsuspend | Change Plan | Add Credits
+
+**Bulk actions bar** (appears when rows checked):
+- Suspend selected | Export emails as CSV
+
+---
+
+### PAGE 4: User Detail `/admin/users/[id]`
+
+**Header:** Avatar + name + email + account status badge + "Suspend/Unsuspend" button
+**Quick stats row:** Balance | Total jobs | Plan | Member since
+
+**6 tabs:**
+
+**Tab 1 — Profile**
+Display all `profiles` fields in a read-only grid. "Edit" button opens a slide-over with editable fields (full_name, timezone, locale). Save → UPDATE profiles, log audit.
+
+Subscription card: plan name, status, billing_cycle, period dates.
+Change Plan button → modal with plan selector. On save → UPDATE profiles.current_plan_id, log audit `user.plan_change`.
+
+Credit balance card showing current balance from `user_credit_balance` view.
+Two buttons:
+- **Add Credits** → modal: amount (number), reason (text) → INSERT credit_ledger { amount: +N, source_type: 'admin_grant', description: reason } → log audit `user.credits_add`
+- **Deduct Credits** → modal: amount (number), reason (text) → INSERT credit_ledger { amount: -N, source_type: 'admin_deduct', description: reason } → log audit `user.credits_deduct`
+
+**Tab 2 — Jobs**
+Table of all jobs for this user. Columns: video title, type, status, progress, downloaded/requested comments, credits used, created_at, View link.
+Filter by status tabs. "Kill job" button for queued/running jobs.
+
+**Tab 3 — Payments**
+Two sub-sections:
+- Package purchases table: package name, credits, price, provider, status badge, date
+- Payment transactions table: event type, amount, status, provider_event_id, date. Expandable row shows raw_payload JSON.
+
+**Tab 4 — Credit History**
+Table from `credit_ledger` WHERE user_id = this user. Newest first.
+Columns: date, description, amount (green if positive, red if negative), balance_after.
+Summary at top: Total added (sum of positive) | Total spent (sum of negative ABS).
+
+**Tab 5 — Security**
+Sessions table from `user_sessions`:
+- Columns: device, browser, OS, IP, country, last active, status badge, "Force logout" button
+- Force logout → UPDATE user_sessions SET is_active=false, logged_out_at=NOW() → log audit `user.force_logout`
+
+Security events table from `security_events` (last 20, newest first).
+Login history table from `login_history` (last 20): method, IP, country, success badge, date.
+
+**Tab 6 — Notifications**
+Table from `notifications`: type, title, body, channel, is_read badge, sent_at.
+"Send notification" button → modal:
+- title, body, type (select), channel (select: in_app|email|both), action_url (optional)
+- INSERT into notifications table
+
+**Danger Zone (red bordered card at bottom):**
+- Suspend: button → modal with reason textarea → UPDATE profiles, log audit `user.suspend`
+- Unsuspend: button (only if suspended) → UPDATE profiles, log audit `user.unsuspend`
+- Delete (soft): red button → confirm modal requiring user to type email → UPDATE profiles SET deleted_at=NOW(), account_status='deleted', log audit `user.delete`
+
+---
+
+### PAGE 5: Jobs `/admin/jobs`
+
+Server-side paginated. 25 per page.
+
+**Filters:**
+- Search: video_title or video_id
+- Status tabs: All | Queued | Running | Completed | Failed | Cancelled
+- User: text search by email
+- Job type: all | single_video | bulk | scheduled | channel
+- Date range
+
+**Table columns:**
+- Video title + Video ID (two lines)
+- User email (link to /admin/users/[userId])
+- Job type badge
+- Status badge (running = animated pulse)
+- Progress bar (only if running)
+- Comments (downloaded / requested)
+- Credits (reserved → used)
+- Created at | Completed at
+- Actions: View | Kill (if running/queued) | Retry (if failed)
+
+**Kill job:** confirm dialog → UPDATE jobs SET status='cancelled', completed_at=NOW() → INSERT credit_ledger refund if credits_reserved > 0 → log audit `job.kill`
+
+**Retry job:** confirm dialog → UPDATE jobs SET status='queued', error_message=NULL, retry_count=retry_count+1 → log audit `job.retry`
+
+---
+
+### PAGE 6: Job Detail `/admin/jobs/[id]`
+
+Job info card: all fields in grid. Status, progress, error message (if failed), user email link.
+Timeline row: created_at → started_at → completed_at.
+
+Comments table (first 100, paginated):
+Columns: author, text (truncated, click to expand), likes, replies, is_reply badge, sentiment badge, language, date.
+
+Admin actions: Kill | Retry buttons with confirm dialogs.
+
+---
+
+### PAGE 7: Payments `/admin/payments`
+
+**Stats row:**
+- All-time revenue
+- This month revenue
+- Total purchases
+- Failed payments count
+- Refunds issued count
+
+**Tabs:**
+
+Tab 1 — Purchases: table from `package_purchases`
+Columns: user email (link), package name, credits, price, provider badge, status badge, date, "Refund" button
+
+Refund action → confirm modal "Refund $X.XX to [user]?" → UPDATE package_purchases SET payment_status='refunded' → INSERT credit_ledger { amount: -credits_total, source_type: 'refund' } → INSERT payment_transactions { event_type: 'refund.created', status: 'refunded' } → log audit `payment.refund`
+
+Tab 2 — Transactions: table from `payment_transactions`
+Columns: provider, event_type, amount, status, user email, date
+Expandable row: show `raw_payload` as formatted JSON in a code block
+
+---
+
+### PAGE 8: Plans `/admin/plans`
+
+Table of all plans. Columns: Name | $/month | $/year | Credits/month | Active toggle | Visible toggle | Actions
+
+Create plan → slide-over form:
+Fields: name, description, price_monthly, price_yearly, credits_per_month, stripe_price_id_monthly, stripe_price_id_yearly, razorpay_plan_id_monthly, razorpay_plan_id_yearly, is_active, is_visible
+→ INSERT plans, log audit `plans.create`
+
+Edit plan → same form pre-filled → UPDATE plans, log audit `plans.update`
+
+Active/visible toggles work directly in table row → UPDATE plans, log audit `plans.update`
+
+---
+
+### PAGE 9: Credit Packages `/admin/packages`
+
+Table of all `credit_packages`. Columns: Name | Credits | Price | Currency | Active | Sort order | Actions
+
+Create → modal form: name, description, credits_amount, price, currency, stripe_price_id, razorpay_plan_id, sort_order, is_active → INSERT, log audit `package.create`
+
+Edit → same form pre-filled → UPDATE, log audit `package.update`
+
+Delete → confirm (block if purchases exist for this package) → DELETE, log audit `package.delete`
+
+Sort order: up/down arrow buttons to increment/decrement sort_order.
+
+---
+
+### PAGE 10: YouTube API Keys `/admin/api-keys`
+
+**Summary row:**
+- Active keys count
+- Total quota used today
+- Keys with consecutive_errors >= 3 (warning)
+- Paused keys count
+
+If any key has consecutive_errors >= 5: red alert banner at top.
+
+**Keys table:**
+Columns: Label | Key prefix (ONLY first 8 chars + "••••••••" — never show full key) | Quota bar (used/limit with colored progress bar: green<70%, amber<90%, red>=90%) | Error count | Consecutive errors | Status (active/paused badges) | Last used | Actions
+
+Actions per row:
+- Pause → UPDATE is_paused=true, log audit `api_key.pause`
+- Resume → UPDATE is_paused=false, log audit `api_key.resume`
+- Reset quota → UPDATE quota_used=0, consecutive_errors=0, last_reset_at=NOW(), log audit `api_key.reset`
+- Delete → confirm → DELETE, log audit `api_key.delete`
+
+Add new key → modal:
+- label (text)
+- key_value (password input, type=password)
+- quota_limit (number, default 10000)
+→ INSERT youtube_api_keys, log audit `api_key.add`
+After insert: show success toast. Never display the key again.
+
+---
+
+### PAGE 11: Platform Settings `/admin/settings`
+
+Load all rows from `platform_settings` table.
+
+Render each as a card with:
+- `key` in monospace font (read-only)
+- `description` in gray
+- `value` as an editable input:
+  - `maintenance_mode` → toggle switch (converts 'true'/'false')
+  - `new_signups_enabled` → toggle switch
+  - `max_job_comments` → number input
+  - `free_plan_credits` → number input
+  - `credit_cost_per_1000` → number input
+  - all others → text input
+- Last updated time + updated by admin name
+- Individual "Save" button per row
+
+On save → UPDATE platform_settings SET value=X, updated_by=adminId, updated_at=NOW(), log audit `settings.update` with before/after values
+
+Maintenance mode warning: if value='true', show yellow full-width banner: "⚠ Maintenance mode is currently ON — all users see a maintenance page"
+
+---
+
+### PAGE 12: Announcements `/admin/announcements`
+
+Table of all announcements. Columns: Title | Type badge | Audience | Placement | Active toggle | Show period | Actions (Edit, Delete)
+
+Create → slide-over form:
+- title, body (textarea)
+- type: select (info | warning | success | danger)
+- target_audience: select (all | free | starter | pro | agency)
+- placement: select (banner | modal | dashboard | email)
+- cta_label (optional), cta_url (optional)
+- is_dismissable: toggle
+- is_active: toggle
+- show_from: datetime input (optional)
+- show_until: datetime input (optional)
+→ INSERT with created_by=adminId, log audit `announcement.create`
+
+Edit → same form pre-filled → UPDATE, log audit `announcement.update`
+
+Delete → confirm → DELETE, log audit `announcement.delete`
+
+Active toggle in table → UPDATE is_active, log audit `announcement.toggle`
+
+Preview button → renders a visual mock of how the announcement looks (banner / modal mockup inline).
+
+---
+
+### PAGE 13: IP Blocklist `/admin/ip-blocklist`
+
+Table of all IP blocks. Columns: IP/Range | Reason badge | Linked user (email link if user_id exists) | Expires at (or "Permanent") | Active badge | Added by admin | Date | Actions (Remove block)
+
+Add to blocklist → modal:
+- ip_address (validate as valid IPv4/IPv6)
+- ip_range (optional, CIDR notation e.g. 192.168.1.0/24)
+- reason: select (abuse | spam | brute_force | scraping_abuse | manual)
+- expires_at: datetime picker (optional — leave empty for permanent)
+- user_id: optional text search for user email to link
+→ INSERT with blocked_by=adminId, log audit `ip.block`
+
+Remove block → UPDATE is_active=false, log audit `ip.unblock`
+
+Expired blocks show automatically with gray "Expired" badge (where expires_at < NOW()).
+
+---
+
+### PAGE 14: Audit Log `/admin/audit-log`
+
+Read-only. Immutable. No editing allowed.
+
+**Filters:**
+- Search: action name
+- Admin filter: dropdown of all admin_users
+- Target type: all | user | job | payment | settings | announcement | ip | api_key | admin
+- Date range picker
+- Action group: All | User actions | Payment actions | Job actions | Settings actions | Security actions
+
+**Table columns:**
+- Admin (avatar + name)
+- Action (monospace code badge)
+- Target (type + ID — if type=user JOIN profiles to show email; if type=job JOIN jobs to show video_title)
+- IP address
+- Date + exact time
+- "Details" button → expand row
+
+**Expanded row:** Show `before_value` and `after_value` JSONB as a side-by-side diff:
+- Before (left, red background): old values
+- After (right, green background): new values
+- Highlight changed keys
+
+**Export:** "Export CSV" button → downloads filtered rows as CSV file with all columns.
+
+---
+
+### PAGE 15: Admin Users `/admin/admins`
+
+Only visible/accessible if `can_manage_admins = true`.
+
+**Table of all admin_users:**
+Columns: Avatar + Name + Email | Role badge | 2FA badge | Active badge | Last login | Created by (admin name) | Date created | Actions
+
+**Actions per row:**
+- Edit role: slide-over to change role_id → UPDATE admin_users, log audit `admin.role_change`
+- Deactivate: confirm → UPDATE is_active=false, deactivated_at=NOW(), deactivated_by=currentAdminId → log audit `admin.deactivate`
+- Cannot deactivate your own account (check adminId === targetId)
+
+**Create new admin** button → `/admin/admins/new`:
+Form: full_name, email, password (shown once — admin must save it), role_id (select)
+On submit → hash password with bcrypt → INSERT admin_users with created_by=currentAdminId → log audit `admin.create`
+
+**Roles reference section (below table):**
+Show the 3 roles (super_admin, support_admin, billing_admin) as a permissions grid — each role is a column, each permission is a row, checkmark or X showing what's allowed. Read-only reference.
+
+---
+
+## SIDEBAR NAVIGATION
+
+```
+[Shield icon] Admin Panel
+────────────────────────
+Overview            (LayoutDashboard)
+────────────────────────
+USERS
+  All Users         (Users)
+JOBS
+  All Jobs          (Play)
+PAYMENTS
+  Transactions      (CreditCard)
+────────────────────────
+CATALOG
+  Plans             (Package)
+  Credit Packages   (Coins)
+────────────────────────
+OPERATIONS
+  YT API Keys       (Key)
+  Platform Settings (Settings)
+  Announcements     (Megaphone)
+  IP Blocklist      (Shield)
+────────────────────────
+SECURITY
+  Audit Log         (ClipboardList)
+  Admin Users       (UserCog)
+────────────────────────
+[Admin avatar + name + role badge]
+[Logout button]
+```
+
+Hide nav items the logged-in admin doesn't have permission to access.
+
+---
+
+## TOPBAR
+
+- Page title (dynamic per page)
+- Right side: "Open user panel" link (opens /dashboard in new tab)
+- Admin name + role badge pill
+- Logout button → POST /api/admin/auth/logout → clear cookie → redirect to /admin/login → log audit `admin.logout`
+
+---
+
+## SHARED COMPONENTS
+
+- `<AdminLayout>` — sidebar + topbar wrapper
+- `<DataTable>` — generic @tanstack/react-table wrapper with sort, filter, pagination
+- `<StatCard>` — metric card: number, label, optional icon, optional trend
+- `<StatusBadge>` — color-coded pill by status string
+- `<ConfirmDialog>` — "Are you sure?" modal before destructive actions
+- `<PageHeader>` — title + optional right-side action button
+- `<SlideOver>` — right-side panel for create/edit forms
+- `<SkeletonTable>` — loading placeholder for tables (show 8 skeleton rows)
+- `<JsonDiff>` — side-by-side before/after JSON comparison for audit log
+
+---
+
+## IMPLEMENTATION RULES
+
+1. **All DB calls server-side only** — Route Handlers at `/api/admin/*`. Never call Supabase from browser components.
+
+2. **Log every write action** via `logAdminAction()` utility. Every INSERT, UPDATE, DELETE. READ queries do NOT need logging.
+
+3. **Confirm dialogs** before ALL destructive actions: suspend, delete, kill, refund, block, deactivate admin.
+
+4. **Never expose sensitive fields:**
+   - `youtube_api_keys.key_value` → show only first 8 chars + "••••••••"
+   - `admin_users.password_hash` → never return from any API
+   - `admin_users.totp_secret` → never return from any API
+   - `user_sessions.session_token_hash` → never return from any API
+
+5. **Server-side pagination everywhere** — use `.range(from, to)` with Supabase. 25 rows per page default.
+
+6. **Real-time** — use Supabase Realtime channel subscription on `jobs` table filtered to `status=running` for the live running jobs count on the overview page.
+
+7. **Error handling** — wrap every page in an error boundary. Show "Failed to load — please refresh" on query errors.
+
+8. **Desktop only** — no need for mobile responsive. Show "Use a desktop browser" below 768px.
+
+9. **Loading states** — every table shows `<SkeletonTable>` while loading. Stat cards show skeleton rectangles.
+
+10. **TypeScript strict** — define `Database` types for all tables in `types/database.ts`.
+
+---
+
+## PACKAGES TO INSTALL
+
+```bash
+npx create-next-app@latest . --typescript --tailwind --app --src-dir=false --import-alias="@/*"
+npx shadcn@latest init
+npx shadcn@latest add button card input label badge skeleton table tabs dialog sheet dropdown-menu avatar separator progress switch select textarea popover calendar command alert tooltip
+npm install @supabase/supabase-js
+npm install lucide-react
+npm install react-hook-form @hookform/resolvers zod
+npm install @tanstack/react-table
+npm install sonner
+npm install date-fns
+npm install recharts
+npm install bcryptjs && npm install -D @types/bcryptjs
+npm install jsonwebtoken && npm install -D @types/jsonwebtoken
+```
+
+---
+
+## FILE STRUCTURE
+
+```
+/app
+  /admin
+    /login/page.tsx
+    /overview/page.tsx
+    /users/page.tsx
+    /users/[id]/page.tsx
+    /jobs/page.tsx
+    /jobs/[id]/page.tsx
+    /payments/page.tsx
+    /plans/page.tsx
+    /packages/page.tsx
+    /api-keys/page.tsx
+    /settings/page.tsx
+    /announcements/page.tsx
+    /ip-blocklist/page.tsx
+    /audit-log/page.tsx
+    /admins/page.tsx
+    /admins/new/page.tsx
+    layout.tsx               ← AdminLayout wrapper
+  /api/admin
+    /auth/login/route.ts
+    /auth/logout/route.ts
+    /users/route.ts
+    /users/[id]/route.ts
+    /users/[id]/suspend/route.ts
+    /users/[id]/unsuspend/route.ts
+    /users/[id]/credits/route.ts
+    /users/[id]/plan/route.ts
+    /users/[id]/notify/route.ts
+    /users/[id]/force-logout/route.ts
+    /jobs/route.ts
+    /jobs/[id]/kill/route.ts
+    /jobs/[id]/retry/route.ts
+    /payments/route.ts
+    /payments/[id]/refund/route.ts
+    /plans/route.ts
+    /plans/[id]/route.ts
+    /packages/route.ts
+    /packages/[id]/route.ts
+    /api-keys/route.ts
+    /api-keys/[id]/route.ts
+    /settings/route.ts
+    /announcements/route.ts
+    /announcements/[id]/route.ts
+    /ip-blocklist/route.ts
+    /ip-blocklist/[id]/route.ts
+    /audit-log/route.ts
+    /admins/route.ts
+    /admins/[id]/route.ts
+    /stats/overview/route.ts
+/lib
+  /supabase-admin.ts         ← createClient with service role key
+  /audit.ts                  ← logAdminAction utility
+  /auth-admin.ts             ← JWT sign/verify helpers
+  /check-permission.ts       ← Permission guard helper
+/middleware.ts               ← Admin auth cookie guard
+/types
+  /database.ts               ← All Supabase table TypeScript types
+/components/admin
+  /AdminLayout.tsx
+  /DataTable.tsx
+  /StatCard.tsx
+  /StatusBadge.tsx
+  /ConfirmDialog.tsx
+  /PageHeader.tsx
+  /SlideOver.tsx
+  /SkeletonTable.tsx
+  /JsonDiff.tsx
+/scripts
+  /seed-admin.ts             ← Create first super_admin
+```
