@@ -3,7 +3,12 @@ import { useLocation } from 'wouter';
 import { CheckCircle2, Play } from 'lucide-react';
 import { Reveal } from './Reveal';
 
-export function Hero() {
+interface Props {
+  freeCredits: string;
+  loading?: boolean;
+}
+
+export function Hero({ freeCredits, loading }: Props) {
   const [, setLocation] = useLocation();
   const [url, setUrl] = useState('');
 
@@ -15,6 +20,13 @@ export function Hero() {
       setLocation('/dashboard');
     }
   };
+
+  const freeNum = parseInt(freeCredits) || 500;
+  const displayCredits = loading
+    ? '...'
+    : freeNum >= 1000
+      ? `${(freeNum / 1000).toFixed(freeNum % 1000 === 0 ? 0 : 1)}k`
+      : freeNum.toLocaleString();
 
   return (
     <section className="pt-32 pb-20 lg:pt-48 lg:pb-32 overflow-hidden">
@@ -83,7 +95,11 @@ export function Hero() {
                 </button>
               </form>
               <p className="mt-4 text-sm text-muted-foreground">
-                Free plan includes 500 comments · No credit card required
+                {loading ? (
+                  <span className="inline-block w-48 h-4 bg-muted rounded animate-pulse" />
+                ) : (
+                  <>Free plan includes <strong>{displayCredits} comments</strong> · No credit card required</>
+                )}
               </p>
             </Reveal>
           </div>

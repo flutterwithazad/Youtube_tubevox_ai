@@ -3,17 +3,27 @@ import { ChevronDown } from 'lucide-react';
 import { Reveal } from './Reveal';
 import { cn } from '@/lib/utils';
 
-const faqs = [
-  { q: "Is it really free?", a: "Yes! Our free plan gives you 500 comments per month to test out the platform. No credit card is required to sign up." },
-  { q: "Can I scrape entire channels?", a: "Absolutely. You can paste a channel URL and we will extract comments from their most recent videos, or you can specify exact videos to include in a bulk run." },
-  { q: "What formats can I export to?", a: "We currently support CSV (great for Excel/Numbers), JSON (great for developers), and direct sync to Google Sheets." },
-  { q: "Will I get blocked by YouTube?", a: "No. YTScraper runs on our distributed cloud infrastructure, not your browser. You use our IPs and proxies, so your personal YouTube account is never at risk." },
-  { q: "Does it scrape replies to comments?", a: "Yes, you can choose to include or exclude nested replies in your export settings before downloading." },
-  { q: "Can I filter comments before downloading?", a: "Yes, our dashboard allows you to filter by keyword, minimum likes, date ranges, and language before you spend your credits on a download." }
-];
+interface Props {
+  freeCredits?: string;
+}
 
-export function FAQ() {
+export function FAQ({ freeCredits = '500' }: Props) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  const freeNum = parseInt(freeCredits) || 500;
+  const displayCredits = freeNum >= 1000
+    ? `${(freeNum / 1000).toFixed(freeNum % 1000 === 0 ? 0 : 1)}k`
+    : freeNum.toLocaleString();
+
+  const faqs = [
+    { q: "Is it really free to start?", a: `Yes! You get ${displayCredits} free comments when you sign up — no credit card required. Use them to test any video or channel right away.` },
+    { q: "How does pricing work?", a: "YTScraper is completely credit-based — no subscriptions. 1 credit = 1 comment. Buy a credit pack once and use it whenever you need. Credits never expire." },
+    { q: "Can I scrape entire channels?", a: "Absolutely. You can paste a channel URL and we will extract comments from their most recent videos, or you can specify exact videos to include in a bulk run." },
+    { q: "What formats can I export to?", a: "We currently support CSV (great for Excel/Numbers), JSON (great for developers), and direct sync to Google Sheets." },
+    { q: "Will I get blocked by YouTube?", a: "No. YTScraper runs on our distributed cloud infrastructure, not your browser. You use our IPs and proxies, so your personal YouTube account is never at risk." },
+    { q: "Does it scrape replies to comments?", a: "Yes, you can choose to include or exclude nested replies in your export settings before downloading." },
+    { q: "Can I filter comments before downloading?", a: "Yes, our dashboard allows you to filter by keyword, minimum likes, date ranges, and language before you spend your credits on a download." }
+  ];
 
   return (
     <section id="faq" className="py-24 bg-card border-y border-border">
