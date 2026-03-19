@@ -1,0 +1,905 @@
+# YouTube Comment Scraper — User Panel (MVP)
+# Stack: Next.js 14 + Supabase (Auth + DB + Edge Functions)
+# Paste this entire prompt into Replit Agent
+# Also attach your yt_scraper_supabase.sql file for schema reference
+
+---
+
+## WHAT WE ARE BUILDING
+
+A user dashboard for a YouTube Comment Scraper SaaS. Users:
+1. Paste a YouTube URL → choose comment count → click Scrape
+2. Watch live progress (Edge Function does the scraping)
+3. Browse all comments in a Comment Explorer (scrollable table with search)
+4. Export as CSV / Excel / JSON with one click
+5. Buy credit packs (payment is "coming soon" modal in MVP)
+6. View credit balance and history
+
+Business model: Credit packages only. NO subscriptions.
+- 1 credit = 1,000 comments
+- Signup bonus credits = dynamic (read from admin-controlled platform_settings table, NEVER hardcode)
+- One job at a time per user
+
+---
+
+## TECH STACK
+
+- Next.js 14 App Router (TypeScript strict)
+- Supabase: Postgres DB + Auth + Edge Functions + Realtime
+- Tailwind CSS + shadcn/ui
+- Fonts: Syne (headings) + DM Sans (body) + JetBrains Mono (numbers/data)
+- Icons: lucide-react
+- Comment table: @tanstack/react-table
+- Forms: react-hook-form + zod
+- Toasts: sonner
+- Dates: date-fns
+- Excel export: SheetJS (xlsx package)
+
+---
+
+## ENV VARS (.env.local)
+
+```
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
+NEXT_PUBLIC_APP_URL=https://example.com
+```
+
+---
+
+## KEY DATABASE TABLES (already exist — DO NOT recreate)
+
+### platform_settings
+key (TEXT PK), value (TEXT), description (TEXT)
+Key: 'free_plan_credits' = how many credits new users get.
+ALWAYS query this. NEVER hardcode the number.
+
+### profiles
+id (UUID = auth.users.id), email, full_name, avatar_url,
+account_status (active|suspended|deleted), timezone, locale,
+created_at, last_login_at
+
+### credit_ledger (append-only source of truth)
+id, user_id, amount (INT, positive=credit, negative=debit),
+source_type (purchase|job_reserve|job_settle|job_cancel_refund|
+             admin_grant|admin_deduct|signup_bonus|refund),
+source_id (UUID), description (TEXT), balance_after (INT), created_at
+
+View: user_credit_balance -> { user_id, balance }
+ALWAYS use this view for balance. Never compute manually.
+
+### credit_packages
+id, name, description, credits_amount (INT), price (NUMERIC),
+currency (TEXT), is_active (BOOL), sort_order (INT)
+
+### jobs
+id, user_id, job_type (single_video|bulk|scheduled|channel),
+video_url, video_id, video_title, channel_name, channel_id, thumbnail,
+view_count, like_count, comment_count,
+requested_comments (INT), downloaded_comments (INT default 0),
+credits_reserved (INT), credits_used (INT),
+status (queued|running|completed|failed|cancelled|paused),
+progress (INT 0-100), filters (JSONB), next_page_token (TEXT),
+error_message (TEXT), retry_count (INT),
+created_at, started_at, completed_at
+
+### comments
+id, job_id, comment_id (YouTube comment ID for dedup),
+author, author_channel, author_channel_id,
+text, text_original, likes (INT), reply_count (INT),
+is_reply (BOOL), parent_id (TEXT),
+sentiment (positive|negative|neutral), language (TEXT),
+published_at, created_at
+Unique constraint: (job_id, comment_id)
+
+### exports
+id, job_id, user_id, format (csv|json|xlsx),
+status (pending|ready|failed|expired),
+file_url, row_count, created_at
+
+### notifications
+id, user_id, type, title, body, action_url,
+is_read (BOOL), read_at, created_at
+
+### announcements
+id, title, body, type (info|warning|success|danger),
+target_audience (all|free|...), placement (banner|modal),
+is_active (BOOL), show_from, show_until, is_dismissable (BOOL)
+
+---
+
+## SUPABASE EDGE FUNCTION
+
+Create: supabase/functions/scrape-comments/index.ts
+
+This Deno function handles ALL YouTube scraping server-side.
+The frontend ONLY creates the job row and calls this function.
+
+```typescript
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const cors = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
+  try {
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    )
+    const authHeader = req.headers.get('Authorization')!
+    const supabaseUser = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: authHeader } } }
+    )
+    const { data: { user }, error: authErr } = await supabaseUser.auth.getUser()
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } })
+    }
+
+    const { job_id } = await req.json()
+    const { data: job } = await supabaseAdmin.from('jobs').select('*').eq('id', job_id).eq('user_id', user.id).single()
+    if (!job) return new Response(JSON.stringify({ error: 'Job not found' }), { status: 404, headers: { ...cors, 'Content-Type': 'application/json' } })
+
+    // Pick least-used API key from pool
+    const { data: apiKey } = await supabaseAdmin.from('youtube_api_keys').select('*').eq('is_active', true).eq('is_paused', false).lt('consecutive_errors', 5).order('quota_used', { ascending: true }).limit(1).single()
+    if (!apiKey) {
+      await supabaseAdmin.from('jobs').update({ status: 'failed', error_message: 'No YouTube API keys available.', completed_at: new Date().toISOString() }).eq('id', job_id)
+      await supabaseAdmin.from('credit_ledger').insert({ user_id: user.id, amount: +job.credits_reserved, source_type: 'job_cancel_refund', source_id: job_id, description: 'Refund: no API keys available' })
+      return new Response(JSON.stringify({ error: 'No API keys' }), { status: 503, headers: { ...cors, 'Content-Type': 'application/json' } })
+    }
+
+    await supabaseAdmin.from('jobs').update({ status: 'running', started_at: new Date().toISOString() }).eq('id', job_id)
+
+    const YT = apiKey.key_value
+    const videoId = job.video_id
+    const maxFetch = job.requested_comments
+    let pageToken: string | null = null
+    let totalFetched = 0
+    let videoTitle = job.video_title
+    let channelName = job.channel_name
+
+    // Fetch video metadata
+    if (!videoTitle) {
+      const vRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${YT}`)
+      const vData = await vRes.json()
+      if (vData.items?.[0]) {
+        const s = vData.items[0].snippet, st = vData.items[0].statistics
+        videoTitle = s.title; channelName = s.channelTitle
+        await supabaseAdmin.from('jobs').update({ video_title: videoTitle, channel_name: channelName, thumbnail: s.thumbnails?.medium?.url, comment_count: parseInt(st.commentCount ?? '0'), view_count: parseInt(st.viewCount ?? '0'), like_count: parseInt(st.likeCount ?? '0') }).eq('id', job_id)
+      }
+    }
+
+    // Scrape comment pages
+    while (totalFetched < maxFetch) {
+      const batchSize = Math.min(100, maxFetch - totalFetched)
+      let url = `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId=${videoId}&maxResults=${batchSize}&textFormat=plainText&key=${YT}`
+      if (pageToken) url += `&pageToken=${pageToken}`
+      const res = await fetch(url)
+      const data = await res.json()
+      if (data.error) {
+        await supabaseAdmin.from('youtube_api_keys').update({ error_count: apiKey.error_count + 1, consecutive_errors: apiKey.consecutive_errors + 1, last_error_at: new Date().toISOString(), last_error_msg: data.error.message }).eq('id', apiKey.id)
+        throw new Error(`YouTube API: ${data.error.message}`)
+      }
+      const items = data.items ?? []
+      const toInsert: Record<string, unknown>[] = []
+      for (const item of items) {
+        const s = item.snippet.topLevelComment.snippet
+        toInsert.push({ job_id, comment_id: item.id, author: s.authorDisplayName, author_channel: s.authorChannelUrl, author_channel_id: s.authorChannelId?.value, text: s.textDisplay, text_original: s.textOriginal, likes: s.likeCount ?? 0, reply_count: item.snippet.totalReplyCount ?? 0, is_reply: false, published_at: s.publishedAt })
+        if (item.snippet.totalReplyCount > 0 && job.filters?.include_replies === true) {
+          const rRes = await fetch(`https://www.googleapis.com/youtube/v3/comments?part=snippet&parentId=${item.id}&maxResults=100&key=${YT}`)
+          const rData = await rRes.json()
+          for (const r of rData.items ?? []) {
+            toInsert.push({ job_id, comment_id: r.id, author: r.snippet.authorDisplayName, author_channel: r.snippet.authorChannelUrl, text: r.snippet.textDisplay, likes: r.snippet.likeCount ?? 0, reply_count: 0, is_reply: true, parent_id: item.id, published_at: r.snippet.publishedAt })
+          }
+        }
+      }
+      if (toInsert.length > 0) await supabaseAdmin.from('comments').upsert(toInsert, { onConflict: 'job_id,comment_id', ignoreDuplicates: true })
+      totalFetched += items.length
+      pageToken = data.nextPageToken ?? null
+      const progress = Math.min(100, Math.round((totalFetched / maxFetch) * 100))
+      await supabaseAdmin.from('jobs').update({ downloaded_comments: totalFetched, progress, next_page_token: pageToken }).eq('id', job_id)
+      await supabaseAdmin.from('youtube_api_keys').update({ quota_used: apiKey.quota_used + 1, last_used_at: new Date().toISOString(), consecutive_errors: 0 }).eq('id', apiKey.id)
+      if (!pageToken) break
+    }
+
+    // Settle credits
+    const creditsUsed = Math.max(1, Math.ceil(totalFetched / 1000))
+    const refund = job.credits_reserved - creditsUsed
+    if (refund > 0) await supabaseAdmin.from('credit_ledger').insert({ user_id: user.id, amount: +refund, source_type: 'job_settle', source_id: job_id, description: `Refund: used ${creditsUsed} of ${job.credits_reserved} reserved` })
+    await supabaseAdmin.from('jobs').update({ status: 'completed', progress: 100, credits_used: creditsUsed, downloaded_comments: totalFetched, completed_at: new Date().toISOString() }).eq('id', job_id)
+    await supabaseAdmin.from('notifications').insert({ user_id: user.id, type: 'job_complete', title: 'Scrape complete!', body: `Downloaded ${totalFetched.toLocaleString()} comments from "${videoTitle}"`, action_url: `/dashboard/jobs/${job_id}`, channel: 'in_app' })
+    await supabaseAdmin.from('usage_logs').insert({ user_id: user.id, job_id, credits_used: creditsUsed, action: 'job_complete', metadata: { downloaded: totalFetched } })
+
+    return new Response(JSON.stringify({ success: true, downloaded: totalFetched, credits_used: creditsUsed }), { headers: { ...cors, 'Content-Type': 'application/json' } })
+  } catch (err) {
+    console.error(err)
+    return new Response(JSON.stringify({ error: (err as Error).message }), { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } })
+  }
+})
+```
+
+Deploy: `supabase functions deploy scrape-comments`
+Set secrets: `supabase secrets set SUPABASE_SERVICE_ROLE_KEY=xxx`
+
+---
+
+## ROUTING
+
+```
+/               → redirect to /dashboard/scrape
+/login          → Login
+/signup         → Signup
+/dashboard      → redirect to /dashboard/scrape
+/dashboard/scrape      → Main page (URL input + progress + comment explorer)
+/dashboard/jobs        → All past jobs
+/dashboard/jobs/[id]   → Job detail + comment explorer
+/dashboard/credits     → Balance + buy packages + credit history
+/dashboard/settings    → Profile + security
+```
+
+---
+
+## DESIGN SYSTEM
+
+Colors:
+- Page bg: #F9FAFB
+- Card bg: #FFFFFF
+- Sidebar: #0A0A0F (near black)
+- Sidebar text: #E5E7EB
+- Primary accent: #E63946 (YouTube red — CTAs, active states)
+- Success: #10B981
+- Warning: #F59E0B
+- Border: #E5E7EB
+- Text primary: #111827
+- Text muted: #6B7280
+- Table hover: #FEF2F2 (very light red)
+
+Fonts (add via next/font/google):
+- Headings: Syne weight 700
+- Body/UI: DM Sans weight 400/500
+- Numbers/data in tables: JetBrains Mono
+
+Component styles:
+- Cards: bg-white rounded-xl border border-gray-200 shadow-sm
+- Primary button: bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium
+- Input: border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500
+
+Status badge colors:
+- queued: gray
+- running: blue + animated pulse dot
+- completed: green
+- failed: red
+- cancelled: gray
+
+---
+
+## DASHBOARD LAYOUT
+
+### Left sidebar (fixed 220px, bg #0A0A0F)
+Top: Logo (red play icon SVG + "YTScraper" Syne bold white)
+
+Nav links (with lucide icons):
+- ▶ Scrape → /dashboard/scrape (PRIMARY, shown first)
+- ≡ My Jobs → /dashboard/jobs
+- ⚡ Credits → /dashboard/credits
+- ⚙ Settings → /dashboard/settings
+
+Active: border-l-2 border-red-500 bg-white/10 text-white
+Inactive: text-gray-400 hover:text-white hover:bg-white/5
+
+Bottom: user avatar (initials circle) + name + email + logout button
+
+### Top bar (inside main content)
+- Page title (dynamic)
+- Right side:
+  - Credit pill: red bg → "⚡ 1,240 credits" (from user_credit_balance view, poll every 30s)
+  - Bell icon + unread count badge
+  - Bell click → dropdown of last 5 notifications with mark-as-read
+
+### Mobile (<768px): bottom tab bar with 4 icon-only tabs
+
+---
+
+## MIDDLEWARE (middleware.ts)
+
+```typescript
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+export async function middleware(request: NextRequest) {
+  let supabaseResponse = NextResponse.next({ request })
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: {
+        getAll() { return request.cookies.getAll() },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({ request })
+          cookiesToSet.forEach(({ name, value, options }) => supabaseResponse.cookies.set(name, value, options))
+        },
+    }}
+  )
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+  if (user && ['/login', '/signup'].includes(request.nextUrl.pathname)) {
+    return NextResponse.redirect(new URL('/dashboard/scrape', request.url))
+  }
+  return supabaseResponse
+}
+export const config = { matcher: ['/dashboard/:path*', '/login', '/signup'] }
+```
+
+---
+
+## LOGIN /login
+
+Centered card max-w-md on #F9FAFB.
+- Logo at top
+- "Welcome back" heading (Syne 28px)
+- "Sign in with Google" button → supabase.auth.signInWithOAuth({ provider: 'google' })
+- Divider
+- Email + password form → supabase.auth.signInWithPassword()
+- "Forgot password?" → supabase.auth.resetPasswordForEmail(email)
+- Link to /signup
+- On success: redirect to /dashboard/scrape
+
+---
+
+## SIGNUP /signup
+
+Same card layout.
+- "Create your account" heading (Syne)
+- Google signup button
+- Divider
+- Full name + email + password + confirm password
+- Terms checkbox
+- Submit → supabase.auth.signUp({ email, password, options: { data: { full_name } } })
+- On success: redirect to /dashboard/scrape + show welcome toast
+
+WELCOME TOAST — read free credits DYNAMICALLY:
+```typescript
+const { data } = await supabase.from('platform_settings').select('value').eq('key', 'free_plan_credits').single()
+toast.success(`🎉 Welcome! You have ${data?.value ?? 'some'} free credits to get started.`)
+// NEVER write a hardcoded number
+```
+Show once using localStorage flag 'yt_welcome_shown'.
+
+---
+
+## SCRAPE PAGE /dashboard/scrape — 3 STATES
+
+### STATE A: URL Input Form
+
+Heading: "Scrape YouTube Comments" (Syne 36px)
+Subtext: "Paste any YouTube video URL and export comments as a dataset."
+
+Large URL input bar:
+[  https://www.youtube.com/watch?v=...          ] [Scrape Now →]
+Below: "⚡ You have {balance} credits · 1 credit = 1,000 comments"
+
+URL validation:
+```typescript
+const extractVideoId = (url: string): string | null => {
+  try {
+    const u = new URL(url)
+    if (u.hostname.includes('youtube.com')) return u.searchParams.get('v')
+    if (u.hostname === 'youtu.be') return u.pathname.slice(1)
+    return null
+  } catch { return null }
+}
+```
+
+OPTIONS PANEL (slides in after valid URL entered):
+- Slider: 500 → 50,000 comments (steps of 500, default 1000)
+  - Show: "Estimated cost: X credits"
+  - Show: "Balance after: Y credits" (green if positive, red if not enough)
+- Collapsible "Advanced options":
+  - Include replies toggle (default off)
+  - Min likes number input (default 0)
+  - Language dropdown (Any, English, Hindi, Spanish, French, Arabic, German)
+  - Keyword filter text input
+
+If balance < credits needed: show red warning + "Buy Credits →" button.
+
+SUBMIT FLOW:
+1. Validate URL, extract video_id
+2. Check active jobs (ONE AT A TIME):
+```typescript
+const { count } = await supabase.from('jobs').select('*', { count: 'exact', head: true })
+  .eq('user_id', user.id).in('status', ['queued', 'running'])
+if (count > 0) { toast.error('You already have a job running. Please wait.'); return }
+```
+3. Check balance >= creditsNeeded
+4. Insert job row with status='queued'
+5. Insert credit_ledger debit: { amount: -creditsNeeded, source_type: 'job_reserve', source_id: job.id }
+6. Call edge function:
+```typescript
+const { error } = await supabase.functions.invoke('scrape-comments', { body: { job_id: job.id } })
+if (error) {
+  // Refund credits
+  await supabase.from('credit_ledger').insert({ user_id: user.id, amount: +creditsNeeded, source_type: 'job_cancel_refund', source_id: job.id, description: 'Refund: failed to start' })
+  await supabase.from('jobs').update({ status: 'failed', error_message: error.message }).eq('id', job.id)
+  toast.error('Failed to start. Credits refunded.')
+  return
+}
+```
+7. Transition to State B
+
+---
+
+### STATE B: Live Progress Card
+
+Replace form with:
+```
+┌─────────────────────────────────────────────────────┐
+│ 🔴 Scraping in progress...                          │
+│                                                     │
+│ The Terrifying Story of Flight 236                  │
+│ by Dhruv Rathee                                     │
+│                                                     │
+│ ████████████████░░░░░░░  68%                        │
+│                                                     │
+│ 1,704 of 2,500 comments fetched                     │
+│ Credits reserved: 3                                 │
+│                              [Cancel Job]           │
+└─────────────────────────────────────────────────────┘
+```
+
+Poll every 2 seconds:
+```typescript
+useEffect(() => {
+  if (!activeJobId) return
+  const poll = setInterval(async () => {
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', activeJobId).single()
+    setActiveJob(job)
+    if (job?.status === 'completed') {
+      clearInterval(poll)
+      toast.success(`✓ ${job.downloaded_comments.toLocaleString()} comments scraped!`)
+      // Auto-transition to State C
+    }
+    if (job?.status === 'failed') { clearInterval(poll); toast.error(job.error_message) }
+  }, 2000)
+  return () => clearInterval(poll)
+}, [activeJobId])
+```
+
+Animated progress bar: smooth CSS transition (transition-all duration-700)
+Animated red pulse dot on "Scraping..." label
+
+Cancel button:
+```typescript
+const cancelJob = async () => {
+  await supabase.from('jobs').update({ status: 'cancelled', completed_at: new Date().toISOString() }).eq('id', activeJobId)
+  await supabase.from('credit_ledger').insert({ user_id: user.id, amount: +activeJob.credits_reserved, source_type: 'job_cancel_refund', source_id: activeJobId, description: 'Refund: user cancelled job' })
+  setActiveJobId(null)
+  toast.info('Job cancelled. Credits refunded.')
+}
+```
+
+---
+
+### STATE C: Comment Explorer
+
+After job completes, show a compact job info bar + full Comment Explorer.
+
+Job info bar:
+[ thumbnail ] Video Title — Channel · 2,483 comments · Used 3 credits
+                                                 [New Scrape] [View in Jobs →]
+
+Then: <CommentExplorer jobId={job.id} videoTitle={job.video_title} totalCount={job.downloaded_comments} />
+
+---
+
+## COMMENT EXPLORER COMPONENT
+
+components/dashboard/CommentExplorer.tsx
+Props: { jobId: string, videoTitle: string, totalCount: number }
+
+This is the MOST IMPORTANT component. Build it once, use it in both:
+- /dashboard/scrape (State C)
+- /dashboard/jobs/[id]
+
+VISUAL DESIGN (based on competitor screenshot):
+
+Container: white card, rounded-xl border, FIXED HEIGHT 650px, internal scroll only.
+
+TOOLBAR (header row inside card):
+Left: Video title (Syne bold) + "Video · Channel · X comments" (small gray)
+Right: 5 action buttons in a row:
+  [🔍 Search]  [↕ SORT ▾]  [⚙ FILTER ▾]  [📋 FIELDS ▾]  [↓ EXPORT ▾]  [⛶]
+
+SEARCH (🔍): Click toggles a search input that slides in below toolbar.
+Client-side filter on author + text fields. Show "X of Y" count. ✕ to clear.
+
+SORT (↕): Dropdown UI only for now. Options: Top likes (wired) | Newest | Oldest | Most replies.
+Only "Top likes" works. Others show "Coming soon" tooltip. Mark button with small "soon" badge.
+
+FILTER (⚙): Opens a panel showing disabled filter options with "Coming soon" message.
+Show grayed-out: Is reply | Min likes | Language | Sentiment. Mark button with "soon" badge.
+
+FIELDS (📋): Dropdown with all-disabled field toggles and "Coming soon" message.
+
+EXPORT (↓): Fully functional. Dropdown: CSV | Excel (.xlsx) | JSON
+See export section below.
+
+FULLSCREEN (⛶): Toggle between h-[650px] and full viewport height. Icon: Maximize2 / Minimize2.
+
+TABLE COLUMNS:
+| Col | Content | Width |
+|-----|---------|-------|
+| reply icon | ↩ Reply icon (gray) if is_reply=true, empty if not | 32px |
+| PUBLISHED | formatDistanceToNow(published_at) | 110px |
+| AUTHOR | Colored initials circle + author name (truncated) | 160px |
+| COMMENT | Text, 2-line clamp, click to expand inline | flex |
+| LIKES | Number with commas, right-aligned | 80px |
+| REPLIES | Count if > 0, right-aligned, gray | 70px |
+
+ROW STYLES:
+- Top-level: bg-white hover:bg-red-50 transition-colors border-b border-gray-100
+- Reply rows: bg-gray-50 hover:bg-red-50 pl-8 (extra indent)
+- Row height: ~52px
+
+CLICK TO EXPAND: Click any row → show full comment text below truncated line.
+Use max-h transition for smooth accordion. Click again to collapse.
+
+AUTHOR AVATARS:
+```typescript
+const getAvatarColor = (name: string) => {
+  const colors = ['#E63946','#2196F3','#4CAF50','#FF9800','#9C27B0','#00BCD4','#FF5722']
+  return colors[name.charCodeAt(0) % colors.length]
+}
+// Render: <div style={{ background: color }}>{name[0].toUpperCase()}</div>
+```
+
+LOAD COMMENTS:
+```typescript
+const PAGE_SIZE = 50
+const loadComments = async (jobId: string, offset = 0) => {
+  const { data } = await supabase.from('comments').select('*')
+    .eq('job_id', jobId).order('likes', { ascending: false })
+    .range(offset, offset + PAGE_SIZE - 1)
+  return data ?? []
+}
+```
+
+INFINITE SCROLL / LOAD MORE:
+- Load first 50 on open
+- "Load more" button at bottom (or IntersectionObserver on last row)
+- Append next 50 to array
+- Show skeleton rows while loading
+- "Showing {loaded} of {totalCount} comments" at bottom
+
+SKELETON LOADING STATE (while initial load):
+Show 10 skeleton rows with animate-pulse.
+
+---
+
+## EXPORT FUNCTIONALITY
+
+The ↓ EXPORT button dropdown has 3 options: CSV | Excel (.xlsx) | JSON
+All exports: client-side generation, direct browser download.
+
+STEP 1: Fetch ALL comments first:
+```typescript
+const fetchAllForExport = async (jobId: string) => {
+  const all = []
+  let offset = 0
+  const id = toast.loading('Preparing export...')
+  while (true) {
+    const { data } = await supabase.from('comments').select('*')
+      .eq('job_id', jobId).order('likes', { ascending: false })
+      .range(offset, offset + 999)
+    if (!data || data.length === 0) break
+    all.push(...data)
+    if (data.length < 1000) break
+    offset += 1000
+  }
+  toast.dismiss(id)
+  return all
+}
+```
+
+STEP 2a: CSV:
+```typescript
+export const downloadCSV = (comments: Comment[], filename: string) => {
+  const headers = ['Published','Author','Author Channel','Comment','Likes','Reply Count','Is Reply','Parent ID','Language']
+  const escape = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const rows = comments.map(c => [
+    c.published_at ? new Date(c.published_at).toISOString() : '',
+    escape(c.author ?? ''), escape(c.author_channel ?? ''), escape(c.text ?? ''),
+    c.likes ?? 0, c.reply_count ?? 0, c.is_reply ? 'true' : 'false',
+    c.parent_id ?? '', c.language ?? '',
+  ].join(','))
+  const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${filename}_comments.csv`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  toast.success(`✓ Downloaded ${comments.length.toLocaleString()} comments as CSV`)
+}
+```
+
+STEP 2b: Excel (SheetJS):
+```typescript
+import * as XLSX from 'xlsx'
+export const downloadExcel = (comments: Comment[], filename: string) => {
+  const rows = comments.map(c => ({
+    'Published': c.published_at ? new Date(c.published_at).toLocaleDateString() : '',
+    'Author': c.author ?? '', 'Author Channel': c.author_channel ?? '',
+    'Comment': c.text ?? '', 'Likes': c.likes ?? 0, 'Reply Count': c.reply_count ?? 0,
+    'Is Reply': c.is_reply ? 'Yes' : 'No', 'Parent ID': c.parent_id ?? '', 'Language': c.language ?? '',
+  }))
+  const ws = XLSX.utils.json_to_sheet(rows)
+  ws['!cols'] = [{ wch: 14 },{ wch: 25 },{ wch: 35 },{ wch: 80 },{ wch: 8 },{ wch: 12 },{ wch: 10 },{ wch: 22 },{ wch: 10 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Comments')
+  XLSX.writeFile(wb, `${filename}_comments.xlsx`)
+  toast.success(`✓ Downloaded ${comments.length.toLocaleString()} comments as Excel`)
+}
+```
+
+STEP 2c: JSON:
+```typescript
+export const downloadJSON = (comments: Comment[], filename: string, videoTitle: string) => {
+  const payload = {
+    exported_at: new Date().toISOString(), video_title: videoTitle,
+    total_comments: comments.length,
+    comments: comments.map(c => ({
+      id: c.comment_id, author: c.author, author_channel: c.author_channel,
+      text: c.text, likes: c.likes, reply_count: c.reply_count,
+      is_reply: c.is_reply, parent_id: c.parent_id ?? null,
+      language: c.language ?? null, published_at: c.published_at,
+    }))
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${filename}_comments.json`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  toast.success(`✓ Downloaded ${comments.length.toLocaleString()} comments as JSON`)
+}
+```
+
+STEP 3: Record export in DB:
+```typescript
+await supabase.from('exports').insert({ job_id, user_id: user.id, format, status: 'ready', row_count: comments.length })
+```
+
+---
+
+## JOBS LIST PAGE /dashboard/jobs
+
+Header: "My Jobs" (Syne) + red "New Scrape →" button
+
+STATS ROW (3 small cards):
+- Total jobs: COUNT(*) FROM jobs WHERE user_id = auth.uid()
+- Comments scraped: COALESCE(SUM(downloaded_comments),0) WHERE status='completed'
+- Credits spent: ABS(COALESCE(SUM(amount),0)) FROM credit_ledger WHERE amount < 0
+
+JOBS TABLE columns:
+| Thumbnail | Video title + channel (2 lines) | Status badge | Progress (if running) | Comments (dl/req) | Credits | Date | Actions |
+
+Actions per row:
+- completed → green "View Comments →" button → /dashboard/jobs/[id]
+- running → "Cancel" button (cancel + refund)
+- failed → "Retry" ghost button (resets status to queued, re-invokes edge function)
+- cancelled → gray info
+
+Pagination: 20 per page.
+
+Empty state: "No jobs yet · Start your first scrape →"
+
+---
+
+## JOB DETAIL PAGE /dashboard/jobs/[id]
+
+Top card: video title (Syne) + channel + URL link
+Status badge + progress bar (if still running)
+Stats: Downloaded | Requested | Credits used | Duration | Date
+
+If failed: red alert card with error_message + "Retry Job" button
+
+Below: full <CommentExplorer jobId={id} videoTitle={...} totalCount={...} />
+
+---
+
+## CREDITS PAGE /dashboard/credits
+
+TOP: Balance card
+```
+┌────────────────────────────────────┐
+│ ⚡ Your Credit Balance             │
+│                                    │
+│         1,240                      │
+│      credits remaining             │
+│                                    │
+│ 1 credit = 1,000 comments scraped  │
+│ New users get {freeCredits} credits│
+│ Last: Used 3 credits 2 hours ago   │
+└────────────────────────────────────┘
+```
+
+Read free credits DYNAMICALLY:
+```typescript
+const { data } = await supabase.from('platform_settings').select('value').eq('key', 'free_plan_credits').single()
+// Display: `New users get ${data?.value ?? '...'} free credits on signup`
+// NEVER hardcode any number here
+```
+
+MIDDLE: "Get More Credits" section
+
+Load packages:
+```typescript
+const { data: packages } = await supabase.from('credit_packages').select('*').eq('is_active', true).order('sort_order', { ascending: true })
+```
+
+Package cards grid (3 col desktop):
+- Name (Syne bold)
+- Credits amount (large, JetBrains Mono)
+- Price
+- Description (gray)
+- "Buy Now →" red button
+
+Middle package: red border ring + "⭐ Most Popular" badge
+
+BUY NOW → Payment coming soon modal:
+```
+💳 Payments Coming Soon
+We're integrating Razorpay and Stripe.
+[pre-filled email input]
+[✓ Notify Me] → success toast only, no DB insert
+Meanwhile use your free credits!
+```
+
+BOTTOM: Credit history table
+Load: credit_ledger WHERE user_id=auth.uid() ORDER BY created_at DESC LIMIT 50
+
+Columns: Date | Description | Source badge | Amount (+green/-red, JetBrains Mono) | Balance after (gray, JetBrains Mono)
+
+---
+
+## SETTINGS PAGE /dashboard/settings
+
+Two tabs: Profile | Security
+
+Profile tab:
+- Avatar circle (colored initials). "Change avatar" → toast "Coming soon"
+- Full name (editable)
+- Email (read-only + info tooltip)
+- Timezone select (UTC, IST, EST, PST, GMT, CET, JST)
+- Language (English, Hindi, Spanish)
+- Save → supabase.from('profiles').update({ full_name, timezone, locale })
+
+Security tab:
+- New password + confirm password inputs
+- Password strength indicator
+- Submit → supabase.auth.updateUser({ password: newPassword })
+
+---
+
+## ANNOUNCEMENT BANNER
+
+On every dashboard page, check for active announcements:
+```typescript
+const { data: ann } = await supabase.from('announcements').select('*')
+  .eq('is_active', true).in('target_audience', ['all'])
+  .lte('show_from', new Date().toISOString())
+  .or(`show_until.is.null,show_until.gte.${new Date().toISOString()}`)
+  .order('created_at', { ascending: false }).limit(1).single()
+```
+
+If found, show dismissable colored banner at top of content:
+- info → blue-50 bg + blue-700 text
+- warning → amber-50 + amber-700
+- danger → red-50 + red-700
+- success → green-50 + green-700
+
+Include title + body + optional CTA link.
+Dismiss: localStorage key `dismissed_${ann.id}`
+
+---
+
+## NOTIFICATION BELL
+
+Unread count:
+```typescript
+const { count } = await supabase.from('notifications')
+  .select('*', { count: 'exact', head: true })
+  .eq('user_id', user.id).eq('is_read', false)
+```
+
+Bell click → dropdown of last 5 notifications
+Each: type icon + title + body (truncated) + time ago
+Click → mark as read + navigate to action_url
+"Mark all read" button at top
+
+---
+
+## PACKAGES TO INSTALL
+
+```bash
+npx create-next-app@latest . --typescript --tailwind --app --src-dir=false --import-alias="@/*"
+npx shadcn@latest init
+npx shadcn@latest add button card input label badge skeleton table tabs dialog sheet dropdown-menu avatar separator progress switch select textarea tooltip popover slider
+npm install @supabase/supabase-js @supabase/ssr
+npm install lucide-react
+npm install react-hook-form @hookform/resolvers zod
+npm install @tanstack/react-table
+npm install sonner
+npm install date-fns
+npm install xlsx
+```
+
+---
+
+## FILE STRUCTURE
+
+```
+/app
+  /login/page.tsx
+  /signup/page.tsx
+  /dashboard
+    /layout.tsx                 ← DashboardShell
+    /scrape/page.tsx            ← 3-state main page
+    /jobs/page.tsx
+    /jobs/[id]/page.tsx
+    /credits/page.tsx
+    /settings/page.tsx
+
+/components/dashboard
+  DashboardShell.tsx            ← sidebar + topbar
+  Sidebar.tsx
+  Topbar.tsx                    ← credit pill + notification bell
+  NotificationBell.tsx
+  AnnouncementBanner.tsx
+  ScrapeForm.tsx                ← State A: URL input + options
+  JobProgressCard.tsx           ← State B: running job
+  CommentExplorer.tsx           ← THE CORE — reusable in State C + jobs/[id]
+  CommentTable.tsx              ← TanStack table inside explorer
+  JobsTable.tsx
+  CreditBalanceCard.tsx
+  PackageCard.tsx
+  CreditHistoryTable.tsx
+
+/lib/supabase
+  client.ts                     ← createBrowserClient
+  server.ts                     ← createServerClient
+
+/lib/utils
+  export.ts                     ← downloadCSV, downloadExcel, downloadJSON
+  youtube.ts                    ← extractVideoId, validateYouTubeUrl
+  credits.ts                    ← calculateCreditCost(commentCount)
+  avatars.ts                    ← getAvatarColor(name)
+
+/supabase/functions/scrape-comments/index.ts
+
+/middleware.ts
+/types/database.ts
+```
+
+---
+
+## CRITICAL RULES
+
+1. NEVER hardcode credit amounts. Always read 'free_plan_credits' from platform_settings.
+2. Credit balance = ALWAYS from user_credit_balance VIEW. Never compute SUM manually.
+3. ONE JOB AT A TIME. Check for active jobs before creating new one.
+4. Edge Function handles ALL scraping. Frontend only creates job row and invokes function.
+5. CommentExplorer is ONE reusable component. Used in scrape page AND jobs/[id] page.
+6. All exports are 100% client-side. No server upload for MVP. Direct browser download.
+7. All Supabase frontend calls use anon key. RLS policies handle security automatically.
+8. Skeleton loaders everywhere. No blank screens while data loads.
+9. Wrap all Supabase calls in try/catch. Show sonner toast on errors.
+10. If job fails: automatically refund credits_reserved back to user.
