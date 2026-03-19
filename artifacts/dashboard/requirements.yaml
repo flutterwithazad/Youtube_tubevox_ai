@@ -1,0 +1,7 @@
+packages:
+  "@supabase/supabase-js": "Authentication and Database interaction"
+  "date-fns": "Date formatting for comments and jobs"
+  "xlsx": "Excel export functionality"
+images: []
+notes:
+  - Expects VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to be set for functionality.

@@ -16,12 +16,31 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
 
+## Artifacts
+
+### `artifacts/ytscraper-landing` — Marketing Landing Page (at `/`)
+React + Vite landing page for YTScraper. All 12 sections: navbar, hero, social proof, features, use cases, dataset preview table, how it works, testimonials, FAQ accordion, pricing, final CTA, footer. Fonts: Syne (headings), DM Sans (body), JetBrains Mono (data). Pure static frontend — no backend or auth.
+
+### `artifacts/dashboard` — User Panel Dashboard (at `/dashboard/`)
+React + Vite SaaS dashboard connected to Supabase (auth + database).
+- **Auth**: Login/Signup via Supabase (email/password + Google OAuth)
+- **Scrape page**: 3-state UX — URL input → live progress → comment explorer
+- **Jobs page**: History table with status badges, stats cards, cancel/retry actions
+- **Job detail page**: Full job info + embedded CommentExplorer
+- **Credits page**: Balance card (queries `user_credit_balance` view), credit packages grid, credit history table
+- **Settings page**: Profile tab + Security tab with password change
+- **CommentExplorer**: Reusable component with search, sort, export (CSV/Excel/JSON), fullscreen toggle, infinite scroll, skeleton loading
+- **Env vars**: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+- **Packages**: `@supabase/supabase-js`, `date-fns`, `xlsx`, `sonner`
+
 ## Structure
 
 ```text
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
+│   ├── api-server/         # Express API server
+│   ├── ytscraper-landing/  # Marketing landing page (/)
+│   └── dashboard/          # User panel dashboard (/dashboard/)
 ├── lib/                    # Shared libraries
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
