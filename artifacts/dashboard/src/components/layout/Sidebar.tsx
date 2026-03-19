@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/hooks/use-auth";
 import { getAvatarColor } from "@/lib/utils/youtube";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { toast } from "sonner";
 
 const navItems = [
   { href: "/scrape", label: "Scrape", icon: PlaySquare },
@@ -18,6 +19,8 @@ export function Sidebar() {
   
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    toast.success("Logged out successfully");
+    window.location.href = "/dashboard/login";
   };
 
   const name = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
