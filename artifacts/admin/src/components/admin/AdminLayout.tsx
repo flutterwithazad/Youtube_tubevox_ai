@@ -1,13 +1,21 @@
+import { useState, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { useAuth } from '@/lib/auth-context';
 import { useLocation } from 'wouter';
-import { useEffect } from 'react';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const STORAGE_KEY = "admin_sidebar_collapsed";
 
 export function AdminLayout({ children, title }: { children: React.ReactNode; title?: string }) {
   const { admin, loading } = useAuth();
   const [, setLocation] = useLocation();
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(STORAGE_KEY) === "true"; } catch { return false; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, String(collapsed)); } catch {}
+  }, [collapsed]);
 
   useEffect(() => {
     if (!loading && !admin) setLocation('/login');
@@ -21,10 +29,15 @@ export function AdminLayout({ children, title }: { children: React.ReactNode; ti
 
   if (!admin) return null;
 
+  const sidebarWidth = collapsed ? 60 : 240;
+
   return (
     <div className="min-h-screen bg-[#F4F4F8] flex">
-      <Sidebar />
-      <div className="flex-1 ml-[240px] flex flex-col min-h-screen">
+      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
+      <div
+        className="flex-1 flex flex-col min-h-screen transition-all duration-200 ease-in-out"
+        style={{ marginLeft: sidebarWidth }}
+      >
         {/* Topbar */}
         <header className="bg-white border-b border-[#E5E7EB] px-6 py-3.5 flex items-center justify-between sticky top-0 z-30">
           <h1 className="text-base font-semibold text-gray-900">{title}</h1>

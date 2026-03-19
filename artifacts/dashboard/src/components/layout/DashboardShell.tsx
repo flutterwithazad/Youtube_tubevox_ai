@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useLocation } from "wouter";
@@ -9,8 +10,17 @@ interface DashboardShellProps {
   title: string;
 }
 
+const STORAGE_KEY = "dashboard_sidebar_collapsed";
+
 export function DashboardShell({ children, title }: DashboardShellProps) {
   const [location] = useLocation();
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(STORAGE_KEY) === "true"; } catch { return false; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, String(collapsed)); } catch {}
+  }, [collapsed]);
 
   const navItems = [
     { href: "/scrape", icon: PlaySquare },
@@ -21,7 +31,7 @@ export function DashboardShell({ children, title }: DashboardShellProps) {
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
-      <Sidebar />
+      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
       <div className="flex flex-col flex-1 min-w-0">
         <Topbar title={title} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">

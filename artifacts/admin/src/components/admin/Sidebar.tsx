@@ -2,7 +2,8 @@ import { Link, useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth-context';
 import {
   LayoutDashboard, Users, Play, CreditCard, Package, Coins,
-  Key, Settings, Megaphone, Shield, ClipboardList, UserCog, LogOut
+  Key, Settings, Megaphone, Shield, ClipboardList, UserCog, LogOut,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
@@ -51,7 +52,12 @@ const navGroups = [
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-export function Sidebar() {
+interface SidebarProps {
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
+export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { admin, logout } = useAuth();
   const [location] = useLocation();
 
@@ -68,38 +74,63 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="fixed top-0 left-0 h-screen w-[240px] bg-[#0F0F14] flex flex-col z-40">
+    <aside
+      className={cn(
+        'fixed top-0 left-0 h-screen bg-[#0F0F14] flex flex-col z-40 transition-all duration-200 ease-in-out overflow-visible',
+        collapsed ? 'w-[60px]' : 'w-[240px]'
+      )}
+    >
       {/* Logo */}
-      <div className="px-5 py-5 border-b border-white/10">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
+      <div className="px-3 py-5 border-b border-white/10 relative">
+        <div className={cn('flex items-center', collapsed ? 'justify-center' : 'gap-2.5')}>
+          <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
             <Shield className="w-4 h-4 text-white" />
           </div>
-          <span className="text-white font-bold text-base">Admin Panel</span>
+          {!collapsed && (
+            <span className="text-white font-bold text-base whitespace-nowrap">Admin Panel</span>
+          )}
         </div>
+
+        {/* Toggle button */}
+        <button
+          onClick={onToggle}
+          className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-[#0F0F14] border border-white/20 flex items-center justify-center text-white/40 hover:text-white hover:border-indigo-500/60 transition-all z-50 shadow-md"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed
+            ? <ChevronRight className="w-3.5 h-3.5" />
+            : <ChevronLeft className="w-3.5 h-3.5" />
+          }
+        </button>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5">
+      <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
         {navGroups.map((group, gi) => (
           <div key={gi}>
-            {group.title && (
-              <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest px-3 pt-4 pb-1.5">{group.title}</p>
+            {group.title && !collapsed && (
+              <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest px-3 pt-4 pb-1.5">
+                {group.title}
+              </p>
             )}
+            {group.title && collapsed && <div className="pt-3 pb-1 border-t border-white/5 mx-1 mt-2" />}
             {group.items.map(item => {
               if (item.perm && !admin?.permissions[item.perm]) return null;
-              const href = `${base}${item.href}`;
               const active = location === item.href || location.startsWith(item.href + '/');
               return (
                 <Link key={item.href} href={item.href}>
-                  <a className={cn(
-                    'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer',
-                    active
-                      ? 'bg-indigo-600/20 text-white border-l-2 border-indigo-500'
-                      : 'text-white/60 hover:text-white hover:bg-white/5'
-                  )}>
+                  <a
+                    title={collapsed ? item.label : undefined}
+                    className={cn(
+                      'flex items-center py-2 rounded-lg text-sm transition-colors cursor-pointer',
+                      collapsed ? 'justify-center px-2' : 'gap-2.5 px-3',
+                      active
+                        ? 'bg-indigo-600/20 text-white border-l-2 border-indigo-500 rounded-l-none'
+                        : 'text-white/60 hover:text-white hover:bg-white/5'
+                    )}
+                  >
                     <item.icon className="w-4 h-4 shrink-0" />
-                    <span>{item.label}</span>
+                    {!collapsed && <span>{item.label}</span>}
                   </a>
                 </Link>
               );
@@ -109,22 +140,45 @@ export function Sidebar() {
       </nav>
 
       {/* Admin footer */}
-      <div className="border-t border-white/10 p-3">
-        <div className="flex items-center gap-2.5 mb-2 px-1">
-          <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
-            {admin?.fullName?.[0] ?? 'A'}
+      <div className="border-t border-white/10 p-2">
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-2 py-1">
+            <div
+              className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold"
+              title={`${admin?.fullName} — ${admin?.roleName?.replace('_', ' ')}`}
+            >
+              {admin?.fullName?.[0] ?? 'A'}
+            </div>
+            <button
+              onClick={handleLogout}
+              title="Sign out"
+              className="flex items-center justify-center w-7 h-7 text-white/40 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-white text-xs font-medium truncate">{admin?.fullName}</p>
-            <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', roleBadge[admin?.roleName ?? ''] ?? 'bg-gray-700 text-gray-300')}>
-              {admin?.roleName?.replace('_', ' ')}
-            </span>
-          </div>
-        </div>
-        <button onClick={handleLogout} className="w-full flex items-center gap-2 px-3 py-2 text-white/50 hover:text-white hover:bg-white/5 rounded-lg text-xs transition-colors">
-          <LogOut className="w-3.5 h-3.5" />
-          Sign out
-        </button>
+        ) : (
+          <>
+            <div className="flex items-center gap-2.5 mb-2 px-1">
+              <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
+                {admin?.fullName?.[0] ?? 'A'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-white text-xs font-medium truncate">{admin?.fullName}</p>
+                <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', roleBadge[admin?.roleName ?? ''] ?? 'bg-gray-700 text-gray-300')}>
+                  {admin?.roleName?.replace('_', ' ')}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center gap-2 px-3 py-2 text-white/50 hover:text-white hover:bg-white/5 rounded-lg text-xs transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign out
+            </button>
+          </>
+        )}
       </div>
     </aside>
   );
