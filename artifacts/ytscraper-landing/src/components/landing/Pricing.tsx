@@ -22,9 +22,9 @@ export function Pricing() {
                 <span className="text-5xl font-extrabold">$0</span>
                 <span className="text-muted-foreground">/mo</span>
               </div>
-              <Link href="/dashboard" className="block w-full py-3 px-6 text-center rounded-xl font-bold bg-white border-2 border-border text-foreground hover:bg-background transition-colors mb-8">
+              <a href="/dashboard/signup" className="block w-full py-3 px-6 text-center rounded-xl font-bold bg-white border-2 border-border text-foreground hover:bg-background transition-colors mb-8">
                 Start Free
-              </Link>
+              </a>
               <ul className="space-y-4">
                 <li className="flex gap-3"><Check className="w-5 h-5 text-[#10B981] shrink-0" /> <span className="text-muted-foreground">500 comments/mo</span></li>
                 <li className="flex gap-3"><Check className="w-5 h-5 text-[#10B981] shrink-0" /> <span className="text-muted-foreground">CSV & JSON export</span></li>
@@ -46,9 +46,9 @@ export function Pricing() {
                 <span className="text-5xl font-extrabold">$19</span>
                 <span className="text-muted-foreground">/mo</span>
               </div>
-              <Link href="/dashboard" className="block w-full py-3 px-6 text-center rounded-xl font-bold bg-primary text-primary-foreground hover:shadow-lg hover:-translate-y-0.5 transition-all mb-8">
+              <a href="/dashboard/signup" className="block w-full py-3 px-6 text-center rounded-xl font-bold bg-primary text-primary-foreground hover:shadow-lg hover:-translate-y-0.5 transition-all mb-8">
                 Start 7-Day Trial
-              </Link>
+              </a>
               <ul className="space-y-4 text-foreground">
                 <li className="flex gap-3 font-medium"><Check className="w-5 h-5 text-primary shrink-0" /> <span>25,000 comments/mo</span></li>
                 <li className="flex gap-3"><Check className="w-5 h-5 text-primary shrink-0" /> <span>All export formats</span></li>
@@ -67,9 +67,9 @@ export function Pricing() {
                 <span className="text-5xl font-extrabold">$49</span>
                 <span className="text-muted-foreground">/mo</span>
               </div>
-              <Link href="/dashboard" className="block w-full py-3 px-6 text-center rounded-xl font-bold bg-foreground text-background hover:bg-foreground/90 transition-colors mb-8">
+              <a href="/dashboard/signup" className="block w-full py-3 px-6 text-center rounded-xl font-bold bg-foreground text-background hover:bg-foreground/90 transition-colors mb-8">
                 Start 7-Day Trial
-              </Link>
+              </a>
               <ul className="space-y-4">
                 <li className="flex gap-3"><Check className="w-5 h-5 text-[#10B981] shrink-0" /> <span className="text-muted-foreground">100,000 comments/mo</span></li>
                 <li className="flex gap-3"><Check className="w-5 h-5 text-[#10B981] shrink-0" /> <span className="text-muted-foreground">Channel bulk exports</span></li>

@@ -24,12 +24,12 @@ function FinalCTA() {
             </Reveal>
           </div>
           <Reveal delay={200} className="shrink-0 flex flex-col items-center">
-            <Link 
-              href="/dashboard" 
+            <a 
+              href="/dashboard/signup" 
               className="px-8 py-5 rounded-2xl font-bold text-lg bg-primary text-white shadow-[0_0_40px_rgba(255,0,0,0.3)] hover:shadow-[0_0_60px_rgba(255,0,0,0.5)] hover:-translate-y-1 transition-all active:translate-y-0 w-full md:w-auto text-center"
             >
               START FOR FREE →
-            </Link>
+            </a>
             <p className="mt-4 text-sm text-white/40 text-center">
               Free plan · No credit card · 500 comments included
             </p>
