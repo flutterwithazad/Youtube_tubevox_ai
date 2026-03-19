@@ -1,0 +1,473 @@
+# YouTube Comment Scraper — Marketing Landing Page
+# Replit Prompt — Paste this entire prompt into Replit Agent
+# Route: https://example.com/ (root URL)
+# The dashboard is already at /dashboard — do NOT touch that
+
+---
+
+## PROJECT OVERVIEW
+
+Build a **high-converting marketing landing page** for a SaaS tool called
+**"YTScraper"** (you can stylize the name) — a YouTube comment scraping tool
+that lets marketers, researchers, and creators export YouTube comments
+as structured data (CSV, Excel, JSON).
+
+This is a **Next.js 14 page** added to the existing project.
+Only create/modify these files:
+- `app/page.tsx` — the landing page (root `/`)
+- `app/layout.tsx` — update if needed for fonts/meta
+- `components/landing/` — any landing page components
+- `public/` — any static assets needed
+
+Do NOT touch anything under `app/dashboard/` or `app/admin/`.
+
+---
+
+## DESIGN DIRECTION
+
+**Aesthetic**: Clean, modern SaaS — light background, bold typography,
+data-forward visuals. Think Notion, Linear, Vercel marketing pages.
+NOT dark, NOT neon, NOT generic purple gradients.
+
+**Color palette:**
+- Background: pure white `#FFFFFF`
+- Surface/cards: `#F8F9FA`
+- Primary accent: YouTube Red `#FF0000` → use sparingly for CTAs and highlights only
+- Secondary accent: Deep charcoal `#0A0A0F` for headings
+- Body text: `#374151`
+- Muted text: `#6B7280`
+- Border: `#E5E7EB`
+- Success green (for feature bullets): `#10B981`
+
+**Typography:**
+- Headings: `Syne` (Google Font) — bold, geometric, distinctive
+- Body: `DM Sans` (Google Font) — clean, readable
+- Mono/data: `JetBrains Mono` — for code-like elements, comment previews
+
+**Tone:** Professional but approachable. Data tool for smart people.
+Confident, benefit-first copy. Not hype, not corporate.
+
+**Key differentiator from competitor:** Make the page feel more premium,
+more modern, and more data-focused. The competitor's page (reference) is
+functional but looks dated. Ours should feel like a 2025 SaaS product.
+
+---
+
+## SECTION-BY-SECTION SPECIFICATIONS
+
+---
+
+### SECTION 1: NAVBAR (sticky, top)
+
+Left: Logo — small red play triangle icon + "YTScraper" in Syne bold
+Center: Nav links — Features | How it works | Pricing | FAQ
+Right: "Log in" (ghost button) + "Start for free →" (red filled button)
+
+Sticky on scroll. Add a subtle white/blur backdrop when scrolled.
+On mobile: hamburger menu collapsing center links.
+
+---
+
+### SECTION 2: HERO SECTION
+
+**Layout:** Two columns — left: copy + CTA, right: product screenshot mockup
+
+**Left column — copy:**
+
+Badge above headline (small pill): "🎯 Trusted by 2,000+ researchers & marketers"
+
+Main headline (large, Syne bold, ~56px):
+```
+Turn YouTube comments into a
+research-ready dataset
+in seconds.
+```
+The word "research-ready" should be in red `#FF0000`.
+
+Subheadline (DM Sans, 18px, gray):
+```
+Export comments from any YouTube video or channel.
+Filter by keywords, date, likes, and language.
+Download as CSV, Excel, or JSON — instantly.
+```
+
+Three green checkmark bullets below subheadline:
+- ✓ Export comments from millions of videos in one click
+- ✓ Filter by 10+ data points — keywords, likes, replies, language
+- ✓ Export to CSV, Excel, JSON, or push to Google Sheets
+
+**URL input bar** (prominent, full-width of left column):
+- Placeholder: "Paste a YouTube URL..."
+- Red "START FOR FREE →" button on the right
+- Below the input: small text "Free plan includes 500 comments · No credit card required"
+
+**Right column — product mockup:**
+Build a realistic-looking browser window mockup (CSS only — no images needed).
+Show a fake dashboard screenshot inside it with:
+- A dark top bar (mimicking a browser chrome)
+- Inside: a simple data table with columns: Author | Comment | Likes | Date | Sentiment
+- Show 5-6 fake rows of YouTube comment data (made-up realistic data)
+- Add a small "Export CSV" green button at the bottom of the table
+- Animate: a subtle fade-in stagger on the table rows when page loads
+
+Below the mockup: "Copy. Paste. Done." in a styled label, like the competitor.
+
+---
+
+### SECTION 3: SOCIAL PROOF BAR
+
+Full-width gray background strip.
+Center text: "Trusted by teams at:"
+Then 5-6 fake company logos rendered as text in a muted gray stylized font:
+"Shopify" | "HubSpot" | "Notion" | "Buffer" | "Semrush" | "Ahrefs"
+(Make them look like real logo wordmarks using CSS font styling — no images needed)
+
+---
+
+### SECTION 4: FEATURES GRID
+
+**Heading:** "Everything you need to work with YouTube comments"
+**Subheading:** "Powerful data tools designed for marketers and data analysts."
+
+**6 feature cards** in a 3×2 grid (2×3 on mobile):
+
+1. **Versatile export options** — Export to CSV, Excel, JSON, Google Sheets, Notion. Perfect for every workflow.
+2. **Bulk downloads** — Scrape multiple videos or entire channels in one job. Queue jobs and come back to results.
+3. **Familiar tool** — Feels like a spreadsheet. Sort, filter, search comments before exporting. No learning curve.
+4. **No code** — Just paste a URL and click export. No API setup, no terminal, no developers needed.
+5. **Time-efficient** — Queue hundreds of thousands of comments overnight. Wake up to a clean dataset ready to analyze.
+6. **Fast search** — Filter comments by keyword, min likes, date range, language, or replies in milliseconds.
+
+Each card: white background, subtle border, icon (lucide icon or emoji), title bold, description gray.
+Hover: slight lift shadow + red left border accent.
+
+---
+
+### SECTION 5: USE CASES — "PICK YOUR SURFACE"
+
+**Heading:** "Built for every YouTube data workflow"
+**Subheading:** "Whether you're a researcher, marketer, or creator — YTScraper fits your workflow."
+
+**8 use case pills** in a flexible wrap grid (like tags):
+
+1. 🎯 VIDEO COMMENTS
+2. 🔍 SHORTS COMMENTS
+3. 📢 LIVE STREAM CHAT
+4. 🎙️ COMMUNITY POSTS
+5. 📊 CHANNEL COMMENTS
+6. 🤝 COLLAB COMMENTS
+7. 📦 BULK EXPORT
+8. ⏱️ SCHEDULED SCRAPES
+
+Style: rounded pill cards with icon + label. Light gray bg. On hover: red accent border + slight scale.
+
+---
+
+### SECTION 6: DATASET PREVIEW (interactive mockup)
+
+**Heading:** "Dataset preview"
+**Subheading:** "Here's exactly what your exported data looks like."
+
+Build a realistic data table mockup (pure HTML/CSS — no real data needed):
+
+Show a styled table with these columns:
+`#` | `Author` | `Comment text` | `Likes` | `Replies` | `Date` | `Sentiment` | `Language` | `Is reply`
+
+Populate with 8 realistic fake rows. Make the comment text truncated with "..." after ~60 chars.
+Sentiment column: colored badges (green=positive, red=negative, gray=neutral).
+
+Below the table: a green "↓ Download sample" button
+
+Style the table to look like a real spreadsheet/app UI — alternating row colors,
+sticky header, monospace font for the data cells.
+
+---
+
+### SECTION 7: HOW IT WORKS (3 steps)
+
+**Heading:** "How it works"
+**Subheading:** "Get your data in 3 simple steps."
+
+Three large numbered steps, horizontal layout on desktop, vertical on mobile:
+
+**Step 1 — Paste your URL**
+"Copy any YouTube video URL and paste it into YTScraper. We'll fetch video info instantly."
+Visual: Show a URL input mockup with a fake YouTube URL in it.
+
+**Step 2 — Choose your format**
+"Pick how many comments you need. Set filters for language, likes, date. Choose your export format."
+Visual: Show a simple options mockup (dropdowns/sliders represented as styled boxes).
+
+**Step 3 — Download full data**
+"Click export. Your data is ready in seconds. Download CSV, JSON, or Excel with one click."
+Visual: Show a file download mockup with CSV/Excel/JSON format icons.
+
+Each step: large step number in red (Syne font, 80px, low opacity as background), content overlaid.
+Connect steps with a dashed line on desktop.
+
+---
+
+### SECTION 8: TESTIMONIALS
+
+**Heading:** "Hear what our customers say"
+**Subheading:** "Rated 4.9/5 from 300+ happy customers"
+
+**6 testimonial cards** in a 3×2 grid:
+
+Write realistic, specific testimonials. Each card:
+- 5 star rating (yellow stars ★★★★★)
+- Quote text (2-3 sentences, specific and believable)
+- Author name + job title + company
+
+Testimonial 1 (Aarav Sharma, Social Media Manager, D2C Brand):
+"YTScraper saved me 6 hours a week. I used to manually copy comments for sentiment analysis — now I export 50,000 comments with one click. The CSV format works perfectly with our Google Sheets workflow."
+
+Testimonial 2 (Priya Mehta, Market Research Analyst, Consulting Firm):
+"We use this for competitive research on behalf of our clients. The keyword filter is exactly what we needed — we can pull only comments mentioning our client's brand across competitor videos."
+
+Testimonial 3 (James T., YouTuber, 200K subscribers):
+"As a creator, I use this to understand my audience better. The sentiment analysis feature helps me spot recurring complaints and praises across all my videos. It's become part of my monthly review."
+
+Testimonial 4 (Sofia R., Data Scientist, EdTech startup):
+"The JSON export is clean and consistent. I feed it directly into our NLP pipeline without any preprocessing. Exactly the structured format I needed."
+
+Testimonial 5 (Rahul V., Growth Hacker, SaaS Company):
+"Used this to scrape competitor product review videos on YouTube. Found 200+ feature requests our competitor's users were crying out for. Built those features. Our conversion went up 22%."
+
+Testimonial 6 (Lisa K., Academic Researcher, University):
+"We used YTScraper for a misinformation study analyzing comments on health videos. The bulk channel export saved us weeks of manual work. Cited it in our paper."
+
+Style: white cards, subtle shadow, quote in italic, author bold.
+On hover: slight lift.
+
+---
+
+### SECTION 9: FAQ ACCORDION
+
+**Heading:** "Frequently asked questions"
+
+Build an accordion FAQ. Default: all collapsed. Click to expand.
+
+**Q1: What YouTube content is supported?**
+A: YTScraper supports public YouTube videos, Shorts, live streams, and channel pages. Private or age-restricted videos are not accessible. We use the official YouTube Data API to ensure compliance.
+
+**Q2: Which export formats are available?**
+A: You can export comments as CSV, JSON, Excel (.xlsx), or push them directly to Google Sheets or Notion. All formats include the same data: author, comment text, likes, replies, date, language, and sentiment score.
+
+**Q3: How fast is the scraper?**
+A: We typically process 1,000 comments per second. A video with 50,000 comments takes about 50 seconds. Large bulk jobs are queued and you get notified by email when they're ready.
+
+**Q4: Is there a free plan? Any limits?**
+A: Yes — the free plan gives you 500 credits (1 credit = 1,000 comments) every month. No credit card required to start. Paid plans start at $19/month for 25,000 comments/month.
+
+**Q5: Do you support private, unlisted, or age-restricted videos?**
+A: No — we can only access publicly available YouTube content via the official YouTube Data API v3. Private, unlisted, and age-restricted videos are not supported.
+
+**Q6: Can I scrape comments from replies to comments?**
+A: Yes. Enable "Include replies" in the filters and we'll fetch the full reply thread for each top-level comment.
+
+**Q7: Are comment results from my scrapes stored forever?**
+A: We store your job results for 30 days. After that, they're automatically deleted. You can always re-run a scrape or export before deletion.
+
+**Q8: Can I use the API to integrate with my own tools?**
+A: Yes — Pro and Agency plans include API access. Generate a personal API key from your dashboard and query our REST API to run jobs and fetch results programmatically.
+
+Style: clean accordion, smooth expand/collapse animation, red chevron icon that rotates on open.
+
+---
+
+### SECTION 10: PRICING (simplified)
+
+**Heading:** "Simple, transparent pricing"
+**Subheading:** "Start free. Scale as you grow. Cancel anytime."
+
+Show 3 pricing cards:
+
+**Free** — $0/month
+- 500 comments/month
+- CSV export only
+- 1 active job at a time
+- Community support
+CTA: "Start for free →"
+
+**Starter** — $19/month ⭐ Most Popular
+- 25,000 comments/month
+- CSV + JSON + Excel export
+- 5 simultaneous jobs
+- Email support
+- Keyword & language filters
+CTA: "Start 7-day trial →"
+Style this card with a red border and "Most Popular" badge.
+
+**Pro** — $49/month
+- 100,000 comments/month
+- All export formats + Google Sheets
+- Unlimited jobs
+- API access
+- Scheduled scrapes
+- Priority support
+CTA: "Start 7-day trial →"
+
+Below cards: "All paid plans include a 7-day free trial. No credit card required."
+
+---
+
+### SECTION 11: FINAL CTA SECTION
+
+Full-width section. Dark background `#0A0A0F`.
+
+Left side:
+Large heading (Syne, white, 48px):
+```
+Ready to
+get to work?
+```
+Subtext (gray): "Get free credits when you sign up. No subscription required."
+
+Right side:
+Large red CTA button: "START FOR FREE →"
+Below button: small gray text "Free plan · No credit card · 500 comments included"
+
+---
+
+### SECTION 12: FOOTER
+
+Dark background `#0A0A0F`. White/gray text.
+
+**4 columns:**
+
+Column 1 — Brand:
+Logo + name, one-line description: "The fastest way to export YouTube comments as structured data."
+Social icons: Twitter/X, LinkedIn, GitHub (just icons, links to #)
+
+Column 2 — Download comments:
+Links (all pointing to /dashboard for now):
+- YouTube video comments
+- YouTube Shorts comments
+- YouTube channel comments
+- Live stream comments
+- Bulk channel export
+
+Column 3 — Blog (fake links pointing to #):
+- How to analyze YouTube comments
+- Best tools for YouTube research
+- YouTube comment export guide
+- Sentiment analysis tutorial
+
+Column 4 — Support:
+- Pricing (href="#pricing")
+- FAQ (href="#faq")
+- Privacy policy (href="#")
+- Terms of service (href="#")
+- Contact (href="mailto:hello@ytscaper.com")
+
+Bottom bar: "© 2025 YTScraper. All rights reserved." | "Made in India 🇮🇳"
+
+---
+
+## TECHNICAL REQUIREMENTS
+
+### Framework & Dependencies
+This is a Next.js 14 (App Router) project. Only use:
+- React + Next.js (already installed)
+- Tailwind CSS (already installed)
+- Google Fonts: add `Syne` and `DM Sans` and `JetBrains Mono` via `next/font/google`
+- lucide-react for icons (already installed)
+- No additional npm packages needed — build everything with HTML/CSS/Tailwind
+
+### Performance
+- All animations must use CSS `@keyframes` or Tailwind `animate-*` classes
+- Use `IntersectionObserver` for scroll-triggered fade-in animations on sections
+- Images: use `next/image` if needed, but prefer CSS mockups over actual images
+- All CTAs ("Start for free", "START FOR FREE →") must link to `/dashboard` (the existing user dashboard)
+- "Log in" button in navbar links to `/login`
+
+### SEO Meta Tags (add to layout.tsx or page.tsx metadata)
+```typescript
+export const metadata = {
+  title: 'YTScraper — Export YouTube Comments as CSV, Excel & JSON',
+  description: 'Turn YouTube comments into research-ready datasets in seconds. Export comments from any video or channel. Filter by keyword, likes, date, language. Download CSV, Excel, or JSON.',
+  keywords: 'youtube comment scraper, export youtube comments, youtube comments csv, youtube data export',
+  openGraph: {
+    title: 'YTScraper — Export YouTube Comments as Data',
+    description: 'Scrape and export YouTube comments in seconds. CSV, Excel, JSON, Google Sheets.',
+    type: 'website',
+  },
+}
+```
+
+### Scroll Animations
+Add a scroll reveal effect to these sections as they enter viewport:
+- Feature cards: fade up with 100ms stagger between cards
+- Testimonial cards: fade up with 80ms stagger
+- How it works steps: fade in left→right
+- Pricing cards: scale up from 0.95 to 1.0
+
+Use a simple `useInView` hook implemented with IntersectionObserver — no libraries needed:
+```typescript
+// hooks/useInView.ts
+import { useEffect, useRef, useState } from 'react'
+export function useInView(threshold = 0.1) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [inView, setInView] = useState(false)
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setInView(true) },
+      { threshold }
+    )
+    if (ref.current) observer.observe(ref.current)
+    return () => observer.disconnect()
+  }, [])
+  return { ref, inView }
+}
+```
+
+### URL Input Behavior
+The hero URL input should:
+1. Accept a pasted YouTube URL
+2. On click of "START FOR FREE →": redirect to `/dashboard/scrape` with the URL as a query param: `/dashboard/scrape?url=[encodedUrl]`
+3. If input is empty: redirect to `/dashboard` (just sign up flow)
+
+### Responsive Breakpoints
+- Mobile (<640px): single column, reduced font sizes, stacked everything
+- Tablet (640-1024px): 2-column grids
+- Desktop (>1024px): full layout as described
+
+---
+
+## SECTION ORDER (top to bottom)
+
+1. Navbar (sticky)
+2. Hero
+3. Social proof bar
+4. Features grid
+5. Use cases / surfaces
+6. Dataset preview table
+7. How it works (3 steps)
+8. Testimonials
+9. FAQ accordion
+10. Pricing
+11. Final CTA
+12. Footer
+
+---
+
+## COPY GUIDELINES
+
+- Every headline should be benefit-first, not feature-first
+- Use "you/your" language throughout
+- Numbers make copy stronger: "50,000 comments", "6 hours saved", "1 credit = 1,000 comments"
+- Avoid buzzwords: "revolutionary", "game-changing", "powerful"
+- CTAs should have action + benefit: "Start for free →" not just "Sign up"
+- Social proof should be specific and credible
+
+---
+
+## WHAT NOT TO BUILD
+
+- Do NOT build any backend or API routes
+- Do NOT add authentication to this page — it's fully public
+- Do NOT import any new npm packages
+- Do NOT modify anything under /dashboard or /admin
+- Do NOT use purple gradients, dark backgrounds (except footer and final CTA), or generic SaaS templates
+- Do NOT use stock photo placeholders — use CSS mockups instead

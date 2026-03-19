@@ -1,0 +1,10 @@
+packages:
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility function to cleanly merge Tailwind classes without style conflicts"
+
+images: []
+
+notes:
+  - "No backend is required for this landing page."
+  - "Routing is handled by Wouter."
+  - "Animations use CSS keyframes and IntersectionObserver hook instead of heavy external libraries as requested."
