@@ -18,6 +18,17 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 ## Artifacts
 
+### `artifacts/admin` — Admin Panel (at `/admin/`)
+React + Vite full admin panel. Secured by bcrypt + JWT (httpOnly cookie `admin_token`).
+- **Auth**: POST `/api/admin/auth/login` → bcrypt verify → JWT signed with `ADMIN_JWT_SECRET` stored as httpOnly cookie
+- **Pages**: Login, Overview (with Recharts charts), Users (list + detail with 6 tabs), Jobs, Payments, Plans, Packages, API Keys, Settings, Announcements, IP Blocklist, Audit Log, Admins
+- **Backend routes**: All at `/api/admin/*` in `artifacts/api-server/src/routes/admin/`
+- **Supabase**: All admin calls use `SUPABASE_SERVICE_ROLE_KEY` (server-side only, bypasses RLS)
+- **Seed script**: `pnpm --filter @workspace/scripts run seed-admin [email] [password] [name]`
+- **Default credentials**: `admin@yourdomain.com` / `Admin@123456` (change after login)
+- **Env vars needed**: `ADMIN_JWT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+- **Key files**: `artifacts/admin/src/App.tsx`, `artifacts/admin/src/lib/api.ts`, `artifacts/admin/src/lib/auth-context.tsx`, `artifacts/api-server/src/lib/admin-auth.ts`
+
 ### `artifacts/ytscraper-landing` — Marketing Landing Page (at `/`)
 React + Vite landing page for YTScraper. All 12 sections: navbar, hero, social proof, features, use cases, dataset preview table, how it works, testimonials, FAQ accordion, pricing, final CTA, footer. Fonts: Syne (headings), DM Sans (body), JetBrains Mono (data). Pure static frontend — no backend or auth.
 

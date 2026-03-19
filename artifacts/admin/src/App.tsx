@@ -1,42 +1,65 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/not-found";
+import { useEffect } from 'react';
+import { Switch, Route, useLocation, Router as WouterRouter } from 'wouter';
+import { AuthProvider, useAuth } from '@/lib/auth-context';
+import { Toaster } from 'sonner';
+import LoginPage from '@/pages/LoginPage';
+import OverviewPage from '@/pages/OverviewPage';
+import UsersPage from '@/pages/UsersPage';
+import UserDetailPage from '@/pages/UserDetailPage';
+import JobsPage from '@/pages/JobsPage';
+import PaymentsPage from '@/pages/PaymentsPage';
+import PlansPage from '@/pages/PlansPage';
+import PackagesPage from '@/pages/PackagesPage';
+import ApiKeysPage from '@/pages/ApiKeysPage';
+import SettingsPage from '@/pages/SettingsPage';
+import AnnouncementsPage from '@/pages/AnnouncementsPage';
+import IpBlocklistPage from '@/pages/IpBlocklistPage';
+import AuditLogPage from '@/pages/AuditLogPage';
+import AdminsPage from '@/pages/AdminsPage';
 
-const queryClient = new QueryClient();
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-function Home() {
-  return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold text-gray-900">Replit Agent is building...</h1>
-        <p className="mt-2 text-sm text-gray-600">Your app will appear here once it's ready.</p>
-      </div>
-    </div>
-  );
+function RedirectToDefault() {
+  const { admin, loading } = useAuth();
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    if (!loading) {
+      if (admin) setLocation('/overview');
+      else setLocation('/login');
+    }
+  }, [admin, loading]);
+  return null;
 }
 
-function Router() {
+function AppRoutes() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
-      <Route component={NotFound} />
+      <Route path="/login" component={LoginPage} />
+      <Route path="/overview" component={OverviewPage} />
+      <Route path="/users/:id" component={UserDetailPage} />
+      <Route path="/users" component={UsersPage} />
+      <Route path="/jobs" component={JobsPage} />
+      <Route path="/payments" component={PaymentsPage} />
+      <Route path="/plans" component={PlansPage} />
+      <Route path="/packages" component={PackagesPage} />
+      <Route path="/api-keys" component={ApiKeysPage} />
+      <Route path="/settings" component={SettingsPage} />
+      <Route path="/announcements" component={AnnouncementsPage} />
+      <Route path="/ip-blocklist" component={IpBlocklistPage} />
+      <Route path="/audit-log" component={AuditLogPage} />
+      <Route path="/admins" component={AdminsPage} />
+      <Route component={RedirectToDefault} />
     </Switch>
   );
 }
 
-function App() {
+export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <WouterRouter base={base}>
+      <AuthProvider>
+        <Toaster position="top-right" richColors />
+        <AppRoutes />
+      </AuthProvider>
+    </WouterRouter>
   );
 }
-
-export default App;

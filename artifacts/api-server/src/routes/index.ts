@@ -1,8 +1,34 @@
 import { Router, type IRouter } from "express";
-import healthRouter from "./health";
+import healthRouter from "./health.js";
+import adminAuthRouter from "./admin/auth.js";
+import adminStatsRouter from "./admin/stats.js";
+import adminUsersRouter from "./admin/users.js";
+import adminJobsRouter from "./admin/jobs.js";
+import adminPaymentsRouter from "./admin/payments.js";
+import adminPlansRouter from "./admin/plans.js";
+import adminPackagesRouter from "./admin/packages.js";
+import adminApiKeysRouter from "./admin/api-keys.js";
+import adminSettingsRouter from "./admin/settings.js";
+import adminAnnouncementsRouter from "./admin/announcements.js";
+import adminIpBlocklistRouter from "./admin/ip-blocklist.js";
+import adminAuditLogRouter from "./admin/audit-log.js";
+import adminAdminsRouter from "./admin/admins.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use("/admin/auth", adminAuthRouter);
+router.use("/admin/stats", adminStatsRouter);
+router.use("/admin/users", adminUsersRouter);
+router.use("/admin/jobs", adminJobsRouter);
+router.use("/admin/payments", adminPaymentsRouter);
+router.use("/admin/plans", adminPlansRouter);
+router.use("/admin/packages", adminPackagesRouter);
+router.use("/admin/api-keys", adminApiKeysRouter);
+router.use("/admin/settings", adminSettingsRouter);
+router.use("/admin/announcements", adminAnnouncementsRouter);
+router.use("/admin/ip-blocklist", adminIpBlocklistRouter);
+router.use("/admin/audit-log", adminAuditLogRouter);
+router.use("/admin/admins", adminAdminsRouter);
 
 export default router;
