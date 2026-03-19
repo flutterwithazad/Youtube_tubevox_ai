@@ -13,12 +13,13 @@ import Credits from "@/pages/credits";
 import Settings from "@/pages/settings";
 
 import { useAuth } from "@/hooks/use-auth";
+import { SuspendedScreen } from "@/components/SuspendedScreen";
 import { useEffect } from "react";
 
 const queryClient = new QueryClient();
 
 function AuthGuard({ children, requireAuth = true }: { children: React.ReactNode, requireAuth?: boolean }) {
-  const { user, isLoading } = useAuth();
+  const { user, profile, isLoading } = useAuth();
   const [location, setLocation] = useLocation();
 
   useEffect(() => {
@@ -40,6 +41,10 @@ function AuthGuard({ children, requireAuth = true }: { children: React.ReactNode
 
   if (requireAuth && !user) return null;
   if (!requireAuth && user) return null;
+
+  if (requireAuth && user && profile?.is_suspended) {
+    return <SuspendedScreen profile={profile} />;
+  }
 
   return <>{children}</>;
 }
