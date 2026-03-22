@@ -66,6 +66,15 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    // Local dev: forward /api requests to the API server.
+    // On Replit, the platform handles this routing at the proxy level so this
+    // block is never reached. Locally, set API_SERVER_URL in your .env file.
+    proxy: {
+      "/api": {
+        target: process.env.API_SERVER_URL ?? "http://localhost:8080",
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,
