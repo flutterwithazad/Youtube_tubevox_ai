@@ -1,0 +1,313 @@
+# YTScraper — Fix: Credits not being deducted after scrape
+# Paste into Replit Agent
+# The scrape completed with 445 comments but shows 0 credits used
+# This is a database/edge function issue — credits are not being charged
+
+---
+
+## THE PROBLEM
+
+After a successful scrape:
+- 445 comments were fetched ✓
+- Job status = completed ✓
+- Credits used = 0 ✗ (should be 445)
+- Credit balance still shows 8 ✗ (should be reduced)
+
+This means `atomic_credit_deduct()` PostgreSQL function either:
+1. Does not exist in the database yet
+2. Is silently failing and returning { ok: false } — stopping the scrape but not throwing
+3. The RPC call is erroring and the edge function is swallowing the error
+
+---
+
+## STEP 1 — Check if atomic_credit_deduct exists in Supabase
+
+Go to: Supabase Dashboard → SQL Editor → run this:
+
+```sql
+SELECT routine_name, routine_type
+FROM information_schema.routines
+WHERE routine_schema = 'public'
+AND routine_name = 'atomic_credit_deduct';
+```
+
+If it returns 0 rows → the function doesn't exist. Create it in Step 2.
+If it returns 1 row → skip to Step 3 (check why it's failing).
+
+---
+
+## STEP 2 — Create atomic_credit_deduct in Supabase SQL Editor
+
+Run this entire SQL block in Supabase → SQL Editor:
+
+```sql
+CREATE OR REPLACE FUNCTION public.atomic_credit_deduct(
+  p_user_id     UUID,
+  p_batch_size  INT,
+  p_source_id   UUID,
+  p_description TEXT
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_balance     BIGINT;
+  v_new_balance BIGINT;
+BEGIN
+  -- Acquire a per-user advisory lock to prevent concurrent double-spending
+  -- This lock is released automatically at end of transaction
+  PERFORM pg_advisory_xact_lock(hashtext(p_user_id::TEXT));
+
+  -- Calculate current balance from ledger (source of truth)
+  SELECT COALESCE(SUM(amount), 0)
+  INTO v_balance
+  FROM public.credit_ledger
+  WHERE user_id = p_user_id;
+
+  -- Check if user has enough credits
+  IF v_balance < p_batch_size THEN
+    RETURN json_build_object(
+      'ok',      false,
+      'balance', v_balance,
+      'needed',  p_batch_size
+    );
+  END IF;
+
+  -- Deduct credits by inserting a negative ledger row
+  v_new_balance := v_balance - p_batch_size;
+
+  INSERT INTO public.credit_ledger (
+    user_id,
+    amount,
+    source_type,
+    source_id,
+    description,
+    balance_after
+  ) VALUES (
+    p_user_id,
+    -p_batch_size,
+    'job_reserve',
+    p_source_id,
+    p_description,
+    v_new_balance
+  );
+
+  RETURN json_build_object(
+    'ok',      true,
+    'balance', v_new_balance,
+    'deducted', p_batch_size
+  );
+END;
+$$;
+
+-- Grant execute permission to authenticated users and service role
+GRANT EXECUTE ON FUNCTION public.atomic_credit_deduct(UUID, INT, UUID, TEXT)
+  TO authenticated, service_role;
+```
+
+---
+
+## STEP 3 — Verify user_credit_balance view exists
+
+Run in Supabase SQL Editor:
+
+```sql
+SELECT * FROM public.user_credit_balance LIMIT 5;
+```
+
+If it errors with "relation does not exist", create it:
+
+```sql
+CREATE OR REPLACE VIEW public.user_credit_balance AS
+SELECT
+  user_id,
+  COALESCE(SUM(amount), 0)                              AS balance,
+  COUNT(*) FILTER (WHERE amount > 0)                    AS total_credit_events,
+  COUNT(*) FILTER (WHERE amount < 0)                    AS total_debit_events
+FROM public.credit_ledger
+GROUP BY user_id;
+
+-- Grant access
+GRANT SELECT ON public.user_credit_balance TO authenticated, service_role;
+```
+
+---
+
+## STEP 4 — Verify the RPC call in the edge function
+
+Open: supabase/functions/fetch-comments/index.ts
+
+Find the `atomic_credit_deduct` RPC call inside the `onBatch` function.
+It should look like this:
+
+```typescript
+const { data: deductResult, error: rpcErr } = await supabase.rpc(
+  'atomic_credit_deduct',
+  {
+    p_user_id:     user.id,
+    p_batch_size:  batch.length,
+    p_source_id:   job.id,
+    p_description: `Batch: ${alreadyFetched + totalInserted} comments fetched`,
+  }
+)
+```
+
+Add console.log statements to debug it:
+
+```typescript
+console.log('Calling atomic_credit_deduct with:', {
+  user_id:    user.id,
+  batch_size: batch.length,
+  source_id:  job.id,
+})
+
+const { data: deductResult, error: rpcErr } = await supabase.rpc(
+  'atomic_credit_deduct',
+  {
+    p_user_id:     user.id,
+    p_batch_size:  batch.length,
+    p_source_id:   job.id,
+    p_description: `Batch: ${alreadyFetched + totalInserted} comments fetched`,
+  }
+)
+
+console.log('atomic_credit_deduct result:', deductResult)
+console.log('atomic_credit_deduct error:', rpcErr)
+```
+
+Then trigger a new scrape and check the edge function logs:
+Supabase Dashboard → Edge Functions → fetch-comments → Logs
+
+---
+
+## STEP 5 — Fix the 0 credits_used on completed jobs
+
+The `credits_used` field on the job is only set at the end.
+If `creditsUsed` variable in the edge function is 0 after the loop,
+it means `onBatch` returned false immediately (out of credits)
+OR `atomic_credit_deduct` returned `{ ok: false }` on the first batch.
+
+Check the onBatch function in index.ts — find this block:
+
+```typescript
+if (!deductResult?.ok) {
+  console.log(`Insufficient credits (balance=${deductResult?.balance})`)
+  return false  // stops the scrape
+}
+
+creditsUsed += batch.length
+```
+
+The issue: if `deductResult` is null (RPC failed silently), then
+`deductResult?.ok` is `undefined` which is falsy → it returns false
+and credits_used stays 0 even though comments were already inserted.
+
+Fix — make the RPC error visible and handle it properly:
+
+```typescript
+if (rpcErr) {
+  console.error('CRITICAL: atomic_credit_deduct RPC error:', rpcErr.message, rpcErr)
+  // Don't silently fail — throw so the job is marked as failed
+  // rather than completing with 0 credits charged
+  throw new Error(`Credit deduction failed: ${rpcErr.message}`)
+}
+
+if (!deductResult?.ok) {
+  console.log(`Stopping: insufficient credits. Balance=${deductResult?.balance}, needed=${batch.length}`)
+  return false
+}
+
+creditsUsed += batch.length
+console.log(`Deducted ${batch.length} credits. Running total: ${creditsUsed}`)
+```
+
+---
+
+## STEP 6 — After fixing, manually fix the current bad job
+
+The scrape that ran with 0 credits charged needs to be manually corrected.
+Run in Supabase SQL Editor:
+
+```sql
+-- First, find the job that completed with 0 credits
+SELECT id, video_title, downloaded_comments, credits_used, status, created_at
+FROM public.jobs
+WHERE credits_used = 0
+AND status = 'completed'
+AND downloaded_comments > 0
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+For each bad job found, manually deduct the credits:
+
+```sql
+-- Replace JOB_ID with the actual job UUID from the query above
+-- Replace DOWNLOADED_COUNT with the downloaded_comments value
+-- Replace USER_ID with the user's UUID
+
+INSERT INTO public.credit_ledger (
+  user_id,
+  amount,
+  source_type,
+  source_id,
+  description,
+  balance_after
+)
+SELECT
+  'USER_ID'::UUID,
+  -DOWNLOADED_COUNT,
+  'job_reserve',
+  'JOB_ID'::UUID,
+  'Manual correction: credits not charged during scrape',
+  COALESCE((
+    SELECT SUM(amount)
+    FROM public.credit_ledger
+    WHERE user_id = 'USER_ID'::UUID
+  ), 0) - DOWNLOADED_COUNT
+;
+
+-- Also update the job record
+UPDATE public.jobs
+SET credits_used = DOWNLOADED_COUNT
+WHERE id = 'JOB_ID'::UUID;
+```
+
+---
+
+## STEP 7 — Also fix: "All" mode with only 8 credits
+
+When user selects "All" with 8 credits, the system should:
+- Scrape until `atomic_credit_deduct` returns `{ ok: false }` (balance exhausted)
+- Stop gracefully and mark the job completed with however many were fetched
+- NOT continue fetching for free after credits run out
+
+This should already work correctly once Step 2 (creating the function) is done,
+because `onBatch` returns `false` when deductResult.ok is false, which stops
+the `fetchAllComments` loop.
+
+After Step 2, test with "All" mode and 8 credits — it should:
+1. Fetch first batch (~100 comments)
+2. Deduct 100 credits → balance goes negative or to 0
+3. Next batch: atomic_credit_deduct returns { ok: false }
+4. onBatch returns false → scraping stops
+5. Job completes with however many comments were fetched
+
+---
+
+## SUMMARY
+
+The root cause is almost certainly that `atomic_credit_deduct()` PostgreSQL
+function does not exist in the database. The edge function calls it via RPC,
+gets an error, logs it, but then the `!deductResult?.ok` check treats a null
+result as "insufficient credits" and returns false — stopping the scrape
+but charging 0 credits.
+
+Fix order:
+1. Run Step 1 to check if the function exists
+2. If not → run Step 2 to create it
+3. Run Step 3 to verify the view exists
+4. Redeploy the edge function after adding debug logs from Step 4
+5. Test a small scrape and verify credits are deducted in Supabase → Table Editor → credit_ledger
+6. Run Step 6 SQL to correct the job that ran for free

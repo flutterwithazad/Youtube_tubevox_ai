@@ -35,7 +35,7 @@ React + Vite landing page for YTScraper. All 12 sections: navbar, hero, social p
 ### `artifacts/dashboard` — User Panel Dashboard (at `/dashboard/`)
 React + Vite SaaS dashboard connected to Supabase (auth + database).
 - **Auth**: Login/Signup via Supabase (email/password + Google OAuth)
-- **Scrape page**: 3-state UX — URL input → live progress → comment explorer. Calls `fetch-comments` edge function in a chained loop (via `fetch()`) until `done=true`. Real credit balance from `user_credit_balance` view. Cancel writes to `jobs` table. Cost = 1 credit per comment (NOT 1 per 1000).
+- **Scrape page**: 3-state UX — URL input → live progress → comment explorer. Calls `fetch-comments` edge function in a chained loop (via `fetch()`) until `done=true`. Real credit balance from `user_credit_balance` view. Cancel writes to `jobs` table. Cost = 1 credit per comment (NOT 1 per 1000). After each batch the dashboard calls POST `/api/credits/deduct` to deduct credits server-side (the edge function itself does not deduct; our API server calls `atomic_credit_deduct` RPC).
 - **Jobs page**: Real Supabase data. Stats from `credit_ledger` + `jobs`. Inline cancel. Status badges.
 - **Job detail page**: Fetches real job row + embedded CommentExplorer
 - **Credits page**: Balance from `user_credit_balance` view, packages from `credit_packages` table, history from `credit_ledger`. Free credits from `platform_settings WHERE key='free_plan_credits'` (never hardcoded).

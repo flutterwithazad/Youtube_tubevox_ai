@@ -36,7 +36,7 @@ export default function Scrape() {
   const [urlError, setUrlError] = useState<string | null>(null);
   const [videoPreview, setVideoPreview] = useState<VideoPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Chip state
   const [selectedChip, setSelectedChip] = useState<'all' | 5000 | 10000 | 'custom'>('all');
@@ -149,6 +149,33 @@ export default function Scrape() {
     if (data) setActiveJob(data);
   };
 
+  const deductCreditsForBatch = async (
+    accessToken: string,
+    jobId: string,
+    amount: number,
+    description: string,
+  ): Promise<{ ok: boolean; balance?: number; needed?: number }> => {
+    try {
+      const res = await fetch('/api/credits/deduct', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ amount, job_id: jobId, description }),
+      });
+      const data = await res.json();
+      if (res.status === 402) {
+        return { ok: false, balance: data.balance, needed: data.credits_needed };
+      }
+      if (!res.ok) throw new Error(data.error ?? 'Credit deduction failed');
+      return { ok: true, balance: data.balance };
+    } catch (e: any) {
+      console.error('[deductCredits]', e.message);
+      return { ok: false };
+    }
+  };
+
   const runScrapeJob = async () => {
     if (!user) return;
     const { data: { session } } = await supabase.auth.getSession();
@@ -163,6 +190,7 @@ export default function Scrape() {
     let jobId: string | null = null;
     let pageToken: string | null = null;
     let totalComments = 0;
+    let prevTotalComments = 0;
     let totalCreditsUsed = 0;
     let invocationCount = 0;
     const MAX_INVOCATIONS = 100;
@@ -196,17 +224,16 @@ export default function Scrape() {
           if (result.error === "insufficient_credits") {
             const have = typeof result.balance === 'number' ? result.balance : balance;
             const need = typeof result.credits_needed === 'number' ? result.credits_needed : (maxComments ?? 0);
-            const shortfall = Math.max(0, need - have);
+            const shortage = Math.max(0, need - have);
             toast.error(
-              shortfall > 0
-                ? `You need ${shortfall.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
+              shortage > 0
+                ? `You need ${shortage.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
                 : `Not enough credits. Please buy more to continue.`,
               {
                 duration: 7000,
                 action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
               }
             );
-            // Stay on the form — this is NOT a scrape failure
             setState("input");
             setIsRunning(false);
             return;
@@ -225,8 +252,42 @@ export default function Scrape() {
 
       jobId = result.job_id;
       pageToken = result.nextPageToken;
-      totalComments = result.comment_count;
-      totalCreditsUsed += result.credits_used ?? 0;
+      prevTotalComments = totalComments;
+      totalComments = result.comment_count ?? totalComments;
+
+      // Deduct credits for comments fetched in this batch via our API server.
+      // This handles the case where the edge function doesn't deduct credits itself.
+      const edgeCreditsUsed: number = result.credits_used ?? 0;
+      const batchComments = Math.max(0, totalComments - prevTotalComments);
+      const creditsToDeduct = edgeCreditsUsed > 0 ? edgeCreditsUsed : batchComments;
+
+      if (creditsToDeduct > 0 && jobId) {
+        const deductResult = await deductCreditsForBatch(
+          session.access_token,
+          jobId,
+          creditsToDeduct,
+          `Batch: ${creditsToDeduct} comments fetched — 1 credit per comment`,
+        );
+
+        if (!deductResult.ok) {
+          // Out of credits mid-scrape
+          const have = deductResult.balance ?? 0;
+          const need = creditsToDeduct;
+          toast.error(
+            `Ran out of credits mid-scrape. You need ${Math.max(0, need - have).toLocaleString()} more credits.`,
+            {
+              duration: 7000,
+              action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+            }
+          );
+          setState("input");
+          setIsRunning(false);
+          refetchBalance();
+          return;
+        }
+
+        totalCreditsUsed += creditsToDeduct;
+      }
 
       setActiveJobId(jobId);
       setLiveCommentCount(totalComments);
