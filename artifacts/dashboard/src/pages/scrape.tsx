@@ -309,24 +309,29 @@ export default function Scrape() {
       fetchJobDetails(jobId!);
       refetchBalance();
 
-      // Deduct credits for comments fetched in this batch via our API server.
-      // This handles the case where the edge function doesn't deduct credits itself.
+      // Credit deduction logic:
+      // The edge function may already deduct credits itself and returns credits_used > 0.
+      // If it did, we MUST NOT deduct again — that causes double-billing.
+      // Only call our own deduction when credits_used === 0 (edge fn didn't handle it).
       const edgeCreditsUsed: number = result.credits_used ?? 0;
       const batchComments = Math.max(0, totalComments - prevTotalComments);
-      const creditsToDeduct = edgeCreditsUsed > 0 ? edgeCreditsUsed : batchComments;
 
-      if (creditsToDeduct > 0 && jobId) {
+      if (edgeCreditsUsed > 0) {
+        // Edge function already deducted the correct batch amount — just track for UI
+        totalCreditsUsed += batchComments;
+      } else if (batchComments > 0 && jobId) {
+        // Edge function returned 0 credits_used — we handle deduction ourselves
         const deductResult = await deductCreditsForBatch(
           session.access_token,
           jobId,
-          creditsToDeduct,
-          `Batch: ${creditsToDeduct} comments fetched — 1 credit per comment`,
+          batchComments,
+          `Batch: ${batchComments} comments fetched — 1 credit per comment`,
         );
 
         if (!deductResult.ok) {
           // Out of credits mid-scrape
           const have = deductResult.balance ?? 0;
-          const need = creditsToDeduct;
+          const need = batchComments;
           setIsRunning(false);
           refetchBalance();
 
@@ -356,7 +361,7 @@ export default function Scrape() {
           return;
         }
 
-        totalCreditsUsed += creditsToDeduct;
+        totalCreditsUsed += batchComments;
       }
 
       setLiveCreditsUsed(totalCreditsUsed);
