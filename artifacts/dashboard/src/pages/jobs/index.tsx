@@ -199,9 +199,14 @@ export default function JobsList() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {job.status === "completed" && (
+                        {(job.downloaded_comments ?? 0) >= 100 && (
                           <Link href={`/jobs/${job.id}`}>
-                            <button className="text-xs font-medium text-primary hover:underline">View</button>
+                            <button className="text-xs font-medium text-primary hover:underline whitespace-nowrap">
+                              View {(job.downloaded_comments ?? 0).toLocaleString()} Comments
+                              {job.status !== "completed" && (
+                                <span className="ml-1 text-amber-600">(partial)</span>
+                              )}
+                            </button>
                           </Link>
                         )}
                         {job.status === "running" && (

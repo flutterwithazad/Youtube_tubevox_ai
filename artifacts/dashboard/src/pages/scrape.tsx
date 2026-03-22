@@ -19,6 +19,8 @@ interface ActiveJob {
   requested_comments?: number;
   downloaded_comments?: number;
   thumbnail?: string;
+  status?: string;
+  started_at?: string;
 }
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
@@ -48,9 +50,10 @@ export default function Scrape() {
   const [liveCommentCount, setLiveCommentCount] = useState(0);
   const [liveCreditsUsed, setLiveCreditsUsed] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
+  const [isPartialResult, setIsPartialResult] = useState(false);
   const abortRef = useRef(false);
 
-  // On load: check for an existing active job
+  // On load: check for an existing active/stuck job
   useEffect(() => {
     if (!user) return;
     const checkActive = async () => {
@@ -62,12 +65,39 @@ export default function Scrape() {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (data) {
+
+      if (!data) return;
+
+      const comments = data.downloaded_comments ?? 0;
+      const startedAt = data.started_at ? new Date(data.started_at).getTime() : null;
+      const isStuck =
+        data.status === "running" &&
+        startedAt !== null &&
+        Date.now() - startedAt > 10 * 60 * 1000; // 10 minutes
+
+      if (isStuck && comments >= 100) {
+        // Auto-cancel the stuck job and show partial results
+        await supabase
+          .from("jobs")
+          .update({
+            status: "cancelled",
+            completed_at: new Date().toISOString(),
+            error_message: "Job timed out — showing partial results",
+          })
+          .eq("id", data.id);
+        const updatedJob = { ...data, status: "cancelled", error_message: "Job timed out — showing partial results" };
         setActiveJobId(data.id);
-        setActiveJob(data);
-        setLiveCommentCount(data.downloaded_comments ?? 0);
-        setState("running");
+        setActiveJob(updatedJob);
+        setLiveCommentCount(comments);
+        setIsPartialResult(true);
+        setState("completed");
+        return;
       }
+
+      setActiveJobId(data.id);
+      setActiveJob(data);
+      setLiveCommentCount(comments);
+      setState("running");
     };
     checkActive();
   }, [user]);
@@ -273,16 +303,30 @@ export default function Scrape() {
           // Out of credits mid-scrape
           const have = deductResult.balance ?? 0;
           const need = creditsToDeduct;
-          toast.error(
-            `Ran out of credits mid-scrape. You need ${Math.max(0, need - have).toLocaleString()} more credits.`,
-            {
-              duration: 7000,
-              action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
-            }
-          );
-          setState("input");
           setIsRunning(false);
           refetchBalance();
+
+          if (totalComments >= 100) {
+            // Have enough partial data — show it
+            setIsPartialResult(true);
+            setState("completed");
+            toast.warning(
+              `Ran out of credits at ${totalComments.toLocaleString()} comments. Showing what was collected.`,
+              {
+                duration: 7000,
+                action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+              }
+            );
+          } else {
+            setState("input");
+            toast.error(
+              `Ran out of credits. You need ${Math.max(0, need - have).toLocaleString()} more credits.`,
+              {
+                duration: 7000,
+                action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+              }
+            );
+          }
           return;
         }
 
@@ -339,10 +383,22 @@ export default function Scrape() {
         .eq("id", activeJobId);
     }
     setIsRunning(false);
-    setState("input");
-    setActiveJobId(null);
-    setActiveJob(null);
-    toast.info("Job cancelled.");
+
+    if (liveCommentCount >= 100 && activeJobId) {
+      // Enough partial data — keep the explorer open
+      setActiveJob((prev) => prev ? { ...prev, status: "cancelled" } : prev);
+      setIsPartialResult(true);
+      setState("completed");
+      toast.warning(
+        `Job cancelled at ${liveCommentCount.toLocaleString()} comments. Showing available data.`,
+        { duration: 6000 }
+      );
+    } else {
+      setState("input");
+      setActiveJobId(null);
+      setActiveJob(null);
+      toast.info("Job cancelled.");
+    }
   };
 
   const handleReset = () => {
@@ -355,6 +411,7 @@ export default function Scrape() {
     setCustomAmount('');
     setActiveJobId(null);
     setActiveJob(null);
+    setIsPartialResult(false);
   };
 
   // Try Again keeps URL + video preview so the user doesn't have to re-enter
@@ -365,6 +422,7 @@ export default function Scrape() {
     setActiveJob(null);
     setLiveCommentCount(0);
     setLiveCreditsUsed(0);
+    setIsPartialResult(false);
   };
 
   const progressPercent = activeJob?.requested_comments
@@ -795,30 +853,58 @@ export default function Scrape() {
 
         {state === "completed" && (
           <div className="animate-in fade-in slide-in-from-bottom-8 duration-500">
-            <div className="bg-success/10 border border-success/20 rounded-xl p-4 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-success/20 text-success flex items-center justify-center shrink-0">
-                  <CheckCircle2 className="w-5 h-5" />
+            {isPartialResult ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <h4 className="font-bold text-amber-900 text-sm truncate">Partial Results Available</h4>
+                    <p className="text-xs text-amber-700">
+                      {liveCommentCount.toLocaleString()} comments collected ·{' '}
+                      {activeJob?.status === 'cancelled' ? 'Job was cancelled' : 'Credits ran out'}
+                      {' '}· <a href="/dashboard/credits" className="underline font-semibold">Buy more credits →</a>
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <h4 className="font-bold text-foreground text-sm truncate">Scrape Completed</h4>
-                  <p className="text-xs text-muted-foreground">
-                    {liveCommentCount.toLocaleString()} comments · {liveCreditsUsed.toLocaleString()} credits used
-                  </p>
-                </div>
+                <button
+                  onClick={handleReset}
+                  className="bg-white border border-amber-300 text-amber-800 px-4 py-2 rounded-lg text-sm font-medium hover:bg-amber-50 transition-colors shrink-0"
+                >
+                  Start New Scrape
+                </button>
               </div>
-              <button
-                onClick={handleReset}
-                className="bg-background border border-border px-4 py-2 rounded-lg text-sm font-medium hover:bg-secondary transition-colors shrink-0"
-              >
-                Start New Scrape
-              </button>
-            </div>
+            ) : (
+              <div className="bg-success/10 border border-success/20 rounded-xl p-4 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-success/20 text-success flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h4 className="font-bold text-foreground text-sm truncate">Scrape Completed</h4>
+                    <p className="text-xs text-muted-foreground">
+                      {liveCommentCount.toLocaleString()} comments · {liveCreditsUsed.toLocaleString()} credits used
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleReset}
+                  className="bg-background border border-border px-4 py-2 rounded-lg text-sm font-medium hover:bg-secondary transition-colors shrink-0"
+                >
+                  Start New Scrape
+                </button>
+              </div>
+            )}
 
             <CommentExplorer
               jobId={activeJobId || ""}
               videoTitle={activeJob?.video_title || "Scraped Video"}
               totalCount={liveCommentCount}
+              isPartial={isPartialResult}
+              jobStatus={activeJob?.status}
             />
           </div>
         )}

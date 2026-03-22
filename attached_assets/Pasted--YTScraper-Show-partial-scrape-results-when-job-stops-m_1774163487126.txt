@@ -1,0 +1,198 @@
+# YTScraper — Show partial scrape results when job stops mid-way
+# Paste into Replit Agent
+# Only fix the scrape page and jobs page comment explorer visibility logic
+
+---
+
+## THE PROBLEM
+
+When a scrape stops mid-way (credits ran out), the job status is
+NOT 'completed' — it might be 'cancelled', 'failed', or stuck on 'running'.
+
+The Comment Explorer currently only shows when status === 'completed'.
+So even though 445 comments exist in the database, the user sees nothing.
+
+Fix: Show the Comment Explorer whenever downloaded_comments >= 100,
+regardless of the job status.
+
+---
+
+## FIX 1 — Scrape page: transition to Comment Explorer based on comment count
+
+Find the scrape page state logic. Currently it transitions to State C
+(Comment Explorer) only when status === 'completed'.
+
+Change the condition everywhere from:
+
+```typescript
+// OLD — only shows on completed
+if (job.status === 'completed') {
+  setScrapeState('completed')
+}
+```
+
+To this:
+
+```typescript
+// NEW — show comments if we have enough data, regardless of status
+const hasPartialData = (job.downloaded_comments ?? 0) >= 100
+
+if (job.status === 'completed') {
+  setScrapeState('completed')
+  toast.success(`✓ Scraped ${job.downloaded_comments?.toLocaleString()} comments!`)
+}
+else if (job.status === 'failed' || job.status === 'cancelled') {
+  if (hasPartialData) {
+    // We have data — show it instead of the error screen
+    setScrapeState('completed')  // reuse the completed state to show explorer
+    setActiveJob(job)
+    toast.warning(
+      `Scrape stopped at ${job.downloaded_comments?.toLocaleString()} comments (${
+        job.status === 'cancelled' ? 'cancelled' : 'credits ran out'
+      }). Showing available data.`,
+      { duration: 6000 }
+    )
+  } else {
+    // Less than 100 comments — show the error/failure screen
+    setScrapeState('failed')
+    toast.error(job.error_message ?? 'Scrape stopped before any data was collected.')
+  }
+}
+```
+
+---
+
+## FIX 2 — Add a "partial results" banner in the Comment Explorer
+
+When the job did NOT complete fully (status !== 'completed' but we're
+showing results anyway), show a yellow info banner at the top of the
+Comment Explorer card.
+
+In the CommentExplorer component, add this banner just above the table
+(only show it when job status is not 'completed'):
+
+```tsx
+{/* Partial results banner — shown when scrape stopped before completion */}
+{activeJob && activeJob.status !== 'completed' && (activeJob.downloaded_comments ?? 0) >= 100 && (
+  <div className="flex items-center justify-between bg-amber-50 border-b border-amber-200 px-4 py-2.5">
+    <div className="flex items-center gap-2 text-sm text-amber-800">
+      <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
+      </svg>
+      <span>
+        <strong>Partial results</strong> — scrape stopped at{' '}
+        <strong>{activeJob.downloaded_comments?.toLocaleString()}</strong> comments.
+        {activeJob.status === 'cancelled' ? ' Job was cancelled.' : ' Credits ran out.'}
+        {' '}You can still export what was collected.
+      </span>
+    </div>
+    <a
+      href="/dashboard/credits"
+      className="text-xs font-semibold text-amber-800 underline underline-offset-2 hover:text-amber-900 ml-4 flex-shrink-0 whitespace-nowrap"
+    >
+      Buy credits to continue →
+    </a>
+  </div>
+)}
+```
+
+---
+
+## FIX 3 — Jobs list page: show "View Comments" button for partial jobs too
+
+In the jobs list table, the "View Comments" button currently only shows
+for completed jobs. Change it to show for any job with >= 100 comments:
+
+```tsx
+// OLD
+{job.status === 'completed' && (
+  <a href={`/dashboard/jobs/${job.id}`}>View Comments →</a>
+)}
+
+// NEW
+{(job.downloaded_comments ?? 0) >= 100 && (
+  <a href={`/dashboard/jobs/${job.id}`}>
+    View {job.downloaded_comments?.toLocaleString()} Comments →
+    {job.status !== 'completed' && (
+      <span className="ml-1 text-xs text-amber-600">(partial)</span>
+    )}
+  </a>
+)}
+```
+
+---
+
+## FIX 4 — Job detail page (/dashboard/jobs/[id]): show partial banner
+
+On the job detail page, show the Comment Explorer for any job with >= 100
+downloaded comments, and show the partial banner if not completed.
+
+```typescript
+// Change this condition:
+// OLD
+if (job.status !== 'completed') {
+  // show error state, don't render explorer
+}
+
+// NEW
+const showExplorer = (job.downloaded_comments ?? 0) >= 100
+
+// Render based on this:
+{showExplorer && (
+  <CommentExplorer
+    jobId={job.id}
+    videoTitle={job.video_title ?? ''}
+    totalCount={job.downloaded_comments ?? 0}
+    isPartial={job.status !== 'completed'}  // pass this prop
+    jobStatus={job.status}
+  />
+)}
+
+{!showExplorer && job.status === 'failed' && (
+  // show error card with job.error_message
+)}
+```
+
+---
+
+## FIX 5 — Also fix: stuck "running" jobs on page load
+
+If a job is stuck in 'running' status (edge function crashed mid-scrape),
+the page currently shows the progress card forever with no way out.
+
+Add a timeout: if a job has been 'running' for more than 10 minutes
+AND has downloaded_comments >= 100, treat it as partial-complete:
+
+```typescript
+// In the job polling / page load check:
+const isStuck = (
+  job.status === 'running' &&
+  job.started_at &&
+  (Date.now() - new Date(job.started_at).getTime()) > 10 * 60 * 1000 // 10 min
+)
+
+if (isStuck && (job.downloaded_comments ?? 0) >= 100) {
+  // Auto-mark as cancelled so it shows in the explorer
+  await supabase.from('jobs').update({
+    status: 'cancelled',
+    completed_at: new Date().toISOString(),
+    error_message: 'Job timed out — showing partial results',
+  }).eq('id', job.id)
+}
+```
+
+---
+
+## SUMMARY OF CHANGES
+
+1. Scrape page: show Comment Explorer when downloaded_comments >= 100,
+   even if status is 'failed' or 'cancelled' — with amber "partial results" banner
+
+2. Jobs list: show "View X Comments (partial)" button for any job with >= 100 comments
+
+3. Job detail page: render Comment Explorer for any job with >= 100 comments
+
+4. Stuck running jobs: auto-cancel after 10 min and show partial results
+
+The threshold of 100 comments is the minimum meaningful dataset.
+Below 100 = show error. At or above 100 = show what we have.
