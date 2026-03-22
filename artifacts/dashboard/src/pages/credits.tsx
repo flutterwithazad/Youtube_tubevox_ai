@@ -46,22 +46,24 @@ export default function Credits() {
   }, []);
 
   const fetchFreeCredits = async () => {
-    const { data } = await supabase
-      .from("platform_settings")
-      .select("value")
-      .eq("key", "free_plan_credits")
-      .single();
-    setFreeCredits(data?.value ?? "...");
+    try {
+      const res = await fetch("/api/public/settings");
+      const json = await res.json();
+      setFreeCredits(json.free_plan_credits ?? "...");
+    } catch {
+      setFreeCredits("...");
+    }
   };
 
   const fetchPackages = async () => {
     setPackagesLoading(true);
-    const { data } = await supabase
-      .from("credit_packages")
-      .select("*")
-      .eq("is_active", true)
-      .order("sort_order", { ascending: true });
-    setPackages(data ?? []);
+    try {
+      const res = await fetch("/api/public/packages");
+      const json = await res.json();
+      setPackages(json.data ?? []);
+    } catch {
+      setPackages([]);
+    }
     setPackagesLoading(false);
   };
 
