@@ -41,7 +41,6 @@ export default function Scrape() {
   // Chip state
   const [selectedChip, setSelectedChip] = useState<'all' | 5000 | 10000 | 'custom'>('all');
   const [customAmount, setCustomAmount] = useState<string>('');
-  const [customError, setCustomError] = useState<string | null>(null);
 
   // Job state
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -106,55 +105,41 @@ export default function Scrape() {
     if (selectedChip === 'all') return null;
     if (selectedChip === 'custom') {
       const n = parseInt(customAmount);
-      return isNaN(n) ? null : n;
+      return isNaN(n) || n <= 0 ? null : n;
     }
     return selectedChip;
   })();
 
-  const isAffordable = maxComments === null
-    ? balance > 0
-    : balance >= maxComments;
+  // Shortfall: how many more credits does the user need? null = no shortfall
+  const shortfall: number | null = (() => {
+    if (selectedChip === 'all') return null;
+    if (maxComments === null) return null;
+    if (balance >= maxComments) return null;
+    return maxComments - balance;
+  })();
 
-  const balanceAfter = maxComments !== null ? balance - maxComments : 0;
-
+  // All chips are always clickable — never disabled
   const chips = [
-    { id: 'all' as const,    label: 'All',    sublabel: 'Every comment', disabled: balance === 0 },
-    { id: 5000 as const,     label: '5,000',  sublabel: '5K comments',   disabled: balance < 5000 },
-    { id: 10000 as const,    label: '10,000', sublabel: '10K comments',  disabled: balance < 10000 },
-    { id: 'custom' as const, label: 'Custom', sublabel: 'Enter amount',  disabled: balance === 0 },
+    { id: 'all'    as const, label: 'All',    sub: 'Every comment' },
+    { id: 5000     as const, label: '5,000',  sub: '5K comments'   },
+    { id: 10000    as const, label: '10,000', sub: '10K comments'  },
+    { id: 'custom' as const, label: 'Custom', sub: 'Enter amount'  },
   ];
 
-  const handleCustomAmountChange = (value: string) => {
-    setCustomError(null);
-    const clean = value.replace(/[^0-9]/g, '');
-    const n = parseInt(clean);
-    if (clean && n > balance) {
-      setCustomError(`You only have ${balance.toLocaleString()} credits available`);
-      setCustomAmount(String(balance));
-    } else {
-      setCustomAmount(clean);
-      if (clean && n < 100) {
-        setCustomError('Minimum is 100 comments');
-      }
-    }
-  };
-
-  // Submit validation
+  // Submit validation — allow submit even when shortfall; edge fn returns the error
   const urlValid = videoPreview !== null && !urlError;
-  const amountValid = selectedChip === 'all'
-    ? balance > 0
-    : selectedChip === 'custom'
-    ? !!customAmount && parseInt(customAmount) >= 100 && parseInt(customAmount) <= balance
-    : balance >= selectedChip;
 
-  const canSubmit = urlValid && amountValid && !isRunning;
+  const canSubmit = urlValid && !isRunning && (
+    selectedChip === 'all'
+    || selectedChip === 5000
+    || selectedChip === 10000
+    || (selectedChip === 'custom' && !!customAmount && parseInt(customAmount) >= 100)
+  );
 
   const disabledReason = !urlValid
     ? 'Enter a valid YouTube URL first'
-    : !amountValid
-    ? selectedChip === 'custom' && !customAmount
-      ? 'Enter a custom amount'
-      : 'Not enough credits'
+    : selectedChip === 'custom' && (!customAmount || parseInt(customAmount) < 100)
+    ? 'Enter an amount (minimum 100 comments)'
     : isRunning
     ? 'Scrape in progress...'
     : null;
@@ -209,7 +194,13 @@ export default function Scrape() {
 
         if (!response.ok || result.error) {
           if (result.error === "insufficient_credits") {
-            toast.error("Not enough credits. Please top up your balance.");
+            toast.error(
+              `Not enough credits. You need ${result.credits_needed?.toLocaleString() ?? 'more'} credits but have ${balance.toLocaleString()}.`,
+              {
+                action: { label: 'Buy credits', onClick: () => { window.location.href = '/dashboard/credits'; } },
+                duration: 6000,
+              }
+            );
           } else {
             toast.error(result.message ?? result.error ?? "Scraping failed");
           }
@@ -293,7 +284,6 @@ export default function Scrape() {
     setVideoPreview(null);
     setSelectedChip('all');
     setCustomAmount('');
-    setCustomError(null);
     setActiveJobId(null);
     setActiveJob(null);
   };
@@ -450,74 +440,115 @@ export default function Scrape() {
                       <p className="text-sm text-gray-500 mt-0.5">How many comments do you need?</p>
                     </div>
 
+                    {/* All chips always clickable — never disabled */}
                     <div className="flex gap-2 flex-wrap">
-                      {chips.map(chip => (
-                        <button
-                          key={chip.id}
-                          type="button"
-                          disabled={chip.disabled}
-                          onClick={() => {
-                            if (chip.disabled) return;
-                            setSelectedChip(chip.id);
-                            setCustomAmount('');
-                            setCustomError(null);
-                          }}
-                          className={`
-                            flex flex-col items-center px-5 py-3 rounded-xl border-2 transition-all
-                            font-medium text-sm leading-tight
-                            ${chip.disabled
-                              ? 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
-                              : selectedChip === chip.id
-                              ? 'border-red-500 bg-red-50 text-red-700 shadow-sm'
-                              : 'border-gray-200 bg-white text-gray-700 hover:border-red-300 hover:bg-red-50/50 cursor-pointer'
-                            }
-                          `}
-                        >
-                          <span className="font-bold text-base leading-none">{chip.label}</span>
-                          <span className={`text-[11px] mt-1 leading-none ${
-                            chip.disabled ? 'text-gray-300' : selectedChip === chip.id ? 'text-red-500' : 'text-gray-400'
-                          }`}>
-                            {chip.disabled && chip.id !== 'all' && chip.id !== 'custom'
-                              ? `Need ${(chip.id as number).toLocaleString()} credits`
-                              : chip.sublabel
-                            }
-                          </span>
-                        </button>
-                      ))}
+                      {chips.map(chip => {
+                        const isSelected = selectedChip === chip.id;
+                        const chipCost = typeof chip.id === 'number' ? chip.id : null;
+                        const chipShortfall = chipCost && balance < chipCost ? chipCost - balance : null;
+                        return (
+                          <button
+                            key={chip.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedChip(chip.id);
+                              setCustomAmount('');
+                            }}
+                            className={`
+                              flex flex-col items-center px-5 py-3 rounded-xl border-2 transition-all
+                              cursor-pointer select-none
+                              ${isSelected
+                                ? 'border-red-500 bg-red-50 text-red-700 shadow-sm'
+                                : 'border-gray-200 bg-white text-gray-700 hover:border-red-300 hover:bg-red-50/40'
+                              }
+                            `}
+                          >
+                            <span className={`font-bold text-base leading-none ${isSelected ? 'text-red-700' : 'text-gray-900'}`}>
+                              {chip.label}
+                            </span>
+                            <span className={`text-[11px] mt-1 leading-none ${isSelected ? 'text-red-500' : 'text-gray-400'}`}>
+                              {!isSelected && chipShortfall
+                                ? `Need ${chipShortfall.toLocaleString()} more`
+                                : chip.sub
+                              }
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
 
+                    {/* Custom input — user can type any value freely, no auto-capping */}
                     {selectedChip === 'custom' && (
                       <div className="space-y-1.5">
                         <div className={`flex items-center gap-3 border-2 rounded-xl px-4 py-3 bg-white transition-all ${
-                          customError ? 'border-red-400' : 'border-gray-200 focus-within:border-red-400'
+                          shortfall !== null ? 'border-amber-400' : 'border-gray-200 focus-within:border-red-400'
                         }`}>
                           <input
                             type="text"
                             inputMode="numeric"
                             pattern="[0-9]*"
                             value={customAmount}
-                            onChange={e => handleCustomAmountChange(e.target.value)}
-                            placeholder={`Enter amount (max ${balance.toLocaleString()})`}
+                            onChange={e => {
+                              const clean = e.target.value.replace(/[^0-9]/g, '');
+                              setCustomAmount(clean);
+                            }}
+                            placeholder="e.g. 500"
                             className="flex-1 outline-none text-gray-900 font-semibold text-base bg-transparent placeholder-gray-300"
                             autoFocus
                           />
                           <span className="text-sm text-gray-400 flex-shrink-0">comments</span>
                         </div>
-                        {customError ? (
-                          <p className="text-xs text-red-600 flex items-center gap-1 px-1">
+
+                        {customAmount && parseInt(customAmount) < 100 && (
+                          <p className="text-xs text-red-600 flex items-center gap-1.5 px-1">
                             <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
                             </svg>
-                            {customError}
+                            Minimum is 100 comments
                           </p>
-                        ) : customAmount && parseInt(customAmount) >= 100 ? (
-                          <p className="text-xs text-gray-500 px-1">
-                            Will use {parseInt(customAmount).toLocaleString()} credits
+                        )}
+
+                        {shortfall !== null && customAmount && parseInt(customAmount) >= 100 && (
+                          <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                            <p className="text-xs text-amber-800 flex items-center gap-1.5">
+                              <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
+                              </svg>
+                              Add <strong className="mx-0.5">{shortfall.toLocaleString()}</strong> more credits to fetch {parseInt(customAmount).toLocaleString()} comments
+                            </p>
+                            <a href="/dashboard/credits" className="text-xs font-semibold text-amber-800 underline underline-offset-2 hover:text-amber-900 ml-3 flex-shrink-0">
+                              Buy credits →
+                            </a>
+                          </div>
+                        )}
+
+                        {customAmount && parseInt(customAmount) >= 100 && shortfall === null && (
+                          <p className="text-xs text-green-600 flex items-center gap-1.5 px-1">
+                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/>
+                            </svg>
+                            ✓ {parseInt(customAmount).toLocaleString()} credits available
                           </p>
-                        ) : null}
+                        )}
                       </div>
                     )}
 
+                    {/* Shortfall warning for fixed chips (5000 or 10000) */}
+                    {(selectedChip === 5000 || selectedChip === 10000) && shortfall !== null && (
+                      <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                        <p className="text-sm text-amber-800 flex items-center gap-2">
+                          <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
+                          </svg>
+                          Add <strong className="mx-1">{shortfall.toLocaleString()}</strong> more credits to fetch {selectedChip.toLocaleString()} comments
+                        </p>
+                        <a href="/dashboard/credits" className="text-sm font-semibold text-amber-800 underline underline-offset-2 hover:text-amber-900 flex-shrink-0 ml-4">
+                          Buy credits →
+                        </a>
+                      </div>
+                    )}
+
+                    {/* Cost summary row */}
                     <div className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-xl border border-gray-100">
                       <div className="text-sm text-gray-600">
                         <span className="font-medium">Cost: </span>
@@ -525,7 +556,7 @@ export default function Scrape() {
                           {selectedChip === 'all'
                             ? `up to ${balance.toLocaleString()} credits`
                             : selectedChip === 'custom'
-                            ? customAmount
+                            ? customAmount && parseInt(customAmount) > 0
                               ? `${parseInt(customAmount).toLocaleString()} credits`
                               : '— credits'
                             : `${selectedChip.toLocaleString()} credits`
@@ -534,40 +565,20 @@ export default function Scrape() {
                         <span className="text-gray-400 text-xs ml-1">(1 credit = 1 comment)</span>
                       </div>
 
-                      {selectedChip !== 'all' && (
-                        <div className={`text-sm font-medium ${isAffordable ? 'text-green-600' : 'text-red-600'}`}>
-                          {selectedChip === 'custom' && !customAmount
-                            ? null
-                            : isAffordable
-                            ? `Balance after: ${balanceAfter.toLocaleString()}`
-                            : '⚠ Insufficient credits'
-                          }
-                        </div>
-                      )}
-
                       {selectedChip === 'all' && (
-                        <div className="text-sm text-gray-500">
-                          Budget: {balance.toLocaleString()} credits
-                        </div>
+                        <span className="text-sm text-gray-500">Budget: {balance.toLocaleString()} credits</span>
+                      )}
+                      {(selectedChip === 5000 || selectedChip === 10000) && shortfall === null && (
+                        <span className="text-sm text-green-600 font-medium">
+                          Balance after: {(balance - selectedChip).toLocaleString()}
+                        </span>
+                      )}
+                      {selectedChip === 'custom' && customAmount && parseInt(customAmount) >= 100 && shortfall === null && (
+                        <span className="text-sm text-green-600 font-medium">
+                          Balance after: {(balance - parseInt(customAmount)).toLocaleString()}
+                        </span>
                       )}
                     </div>
-
-                    {!isAffordable && selectedChip !== 'all' && (
-                      <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                        <div className="flex items-center gap-2 text-sm text-red-700">
-                          <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                          </svg>
-                          Not enough credits for this amount
-                        </div>
-                        <a
-                          href="/dashboard/credits"
-                          className="text-sm font-semibold text-red-700 underline underline-offset-2 hover:text-red-800 transition-colors"
-                        >
-                          Buy credits →
-                        </a>
-                      </div>
-                    )}
 
                     <div className="pt-2 border-t border-gray-100">
                       <button type="button" className="flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors">
