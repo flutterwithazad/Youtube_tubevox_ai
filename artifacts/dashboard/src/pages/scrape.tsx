@@ -69,35 +69,28 @@ export default function Scrape() {
       if (!data) return;
 
       const comments = data.downloaded_comments ?? 0;
-      const startedAt = data.started_at ? new Date(data.started_at).getTime() : null;
-      const isStuck =
-        data.status === "running" &&
-        startedAt !== null &&
-        Date.now() - startedAt > 10 * 60 * 1000; // 10 minutes
 
-      if (isStuck && comments >= 100) {
-        // Auto-cancel the stuck job and show partial results
-        await supabase
-          .from("jobs")
-          .update({
-            status: "cancelled",
-            completed_at: new Date().toISOString(),
-            error_message: "Job timed out — showing partial results",
-          })
-          .eq("id", data.id);
-        const updatedJob = { ...data, status: "cancelled", error_message: "Job timed out — showing partial results" };
+      // Always cancel jobs found on page load — we can't resume a scrape stream
+      // across page loads. If it has ≥100 comments, show partial results.
+      await supabase
+        .from("jobs")
+        .update({
+          status: "cancelled",
+          completed_at: new Date().toISOString(),
+          error_message: "Session ended — job auto-cancelled on page load",
+        })
+        .eq("id", data.id);
+
+      if (comments >= 100) {
+        const updatedJob = { ...data, status: "cancelled" };
         setActiveJobId(data.id);
         setActiveJob(updatedJob);
         setLiveCommentCount(comments);
         setIsPartialResult(true);
         setState("completed");
-        return;
+        toast.info(`Found a previous scrape with ${comments.toLocaleString()} comments. Showing partial results.`);
       }
-
-      setActiveJobId(data.id);
-      setActiveJob(data);
-      setLiveCommentCount(comments);
-      setState("running");
+      // else: go to input (default state) — not enough data to show
     };
     checkActive();
   }, [user]);
@@ -285,6 +278,12 @@ export default function Scrape() {
       prevTotalComments = totalComments;
       totalComments = result.comment_count ?? totalComments;
 
+      // Update UI immediately so counts are correct even if we return early below
+      setActiveJobId(jobId);
+      setLiveCommentCount(totalComments);
+      fetchJobDetails(jobId!);
+      refetchBalance();
+
       // Deduct credits for comments fetched in this batch via our API server.
       // This handles the case where the edge function doesn't deduct credits itself.
       const edgeCreditsUsed: number = result.credits_used ?? 0;
@@ -319,6 +318,8 @@ export default function Scrape() {
             );
           } else {
             setState("input");
+            setActiveJobId(null);
+            setActiveJob(null);
             toast.error(
               `Ran out of credits. You need ${Math.max(0, need - have).toLocaleString()} more credits.`,
               {
@@ -333,11 +334,7 @@ export default function Scrape() {
         totalCreditsUsed += creditsToDeduct;
       }
 
-      setActiveJobId(jobId);
-      setLiveCommentCount(totalComments);
       setLiveCreditsUsed(totalCreditsUsed);
-      fetchJobDetails(jobId!);
-      refetchBalance();
 
       if (result.cancelled) {
         toast.info("Job was cancelled.");
@@ -899,13 +896,29 @@ export default function Scrape() {
               </div>
             )}
 
-            <CommentExplorer
-              jobId={activeJobId || ""}
-              videoTitle={activeJob?.video_title || "Scraped Video"}
-              totalCount={liveCommentCount}
-              isPartial={isPartialResult}
-              jobStatus={activeJob?.status}
-            />
+            {activeJobId && liveCommentCount > 0 ? (
+              <CommentExplorer
+                jobId={activeJobId}
+                videoTitle={activeJob?.video_title || "Scraped Video"}
+                totalCount={liveCommentCount}
+                isPartial={isPartialResult}
+                jobStatus={activeJob?.status}
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-center border border-border rounded-xl bg-card">
+                <div className="text-4xl mb-4">💬</div>
+                <h3 className="font-bold text-foreground mb-1">Not enough data to show</h3>
+                <p className="text-sm text-muted-foreground mb-6 max-w-sm">
+                  The scrape collected fewer than 100 comments. Start a new scrape or add more credits.
+                </p>
+                <button
+                  onClick={handleReset}
+                  className="bg-primary text-white px-6 py-2.5 rounded-xl font-bold hover:bg-primary/90 transition-colors text-sm"
+                >
+                  Start New Scrape
+                </button>
+              </div>
+            )}
           </div>
         )}
 
