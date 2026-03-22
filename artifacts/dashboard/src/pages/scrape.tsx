@@ -270,20 +270,35 @@ export default function Scrape() {
 
         if (!response.ok || result.error) {
           if (result.error === "insufficient_credits") {
-            const have = typeof result.balance === 'number' ? result.balance : balance;
-            const need = typeof result.credits_needed === 'number' ? result.credits_needed : (maxComments ?? 0);
-            const shortage = Math.max(0, need - have);
-            toast.error(
-              shortage > 0
-                ? `You need ${shortage.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
-                : `Not enough credits. Please buy more to continue.`,
-              {
-                duration: 7000,
-                action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
-              }
-            );
-            setState("input");
+            // Edge function ran out of credits mid-scrape.
+            // If we already have data, show it as partial results — don't throw it away.
+            refetchBalance();
             setIsRunning(false);
+            if (totalComments >= 100 && jobId) {
+              setIsPartialResult(true);
+              setState("completed");
+              toast.warning(
+                `Ran out of credits at ${totalComments.toLocaleString()} comments. Showing what was collected.`,
+                {
+                  duration: 7000,
+                  action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+                }
+              );
+            } else {
+              const have = typeof result.balance === 'number' ? result.balance : balance;
+              const need = typeof result.credits_needed === 'number' ? result.credits_needed : (maxComments ?? 0);
+              const shortage = Math.max(0, need - have);
+              toast.error(
+                shortage > 0
+                  ? `You need ${shortage.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
+                  : `Not enough credits. Please buy more to continue.`,
+                {
+                  duration: 7000,
+                  action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+                }
+              );
+              setState("input");
+            }
             return;
           }
           toast.error(result.message ?? result.error ?? "Scraping failed");
@@ -303,83 +318,49 @@ export default function Scrape() {
       prevTotalComments = totalComments;
       totalComments = result.comment_count ?? totalComments;
 
-      // Update UI immediately so counts are correct even if we return early below
+      // Update UI immediately
       setActiveJobId(jobId);
       setLiveCommentCount(totalComments);
       fetchJobDetails(jobId!);
       refetchBalance();
 
-      // Credit deduction logic:
-      // The edge function may already deduct credits itself and returns credits_used > 0.
-      // If it did, we MUST NOT deduct again — that causes double-billing.
-      // Only call our own deduction when credits_used === 0 (edge fn didn't handle it).
-      const edgeCreditsUsed: number = result.credits_used ?? 0;
-      const batchComments = Math.max(0, totalComments - prevTotalComments);
-
-      if (edgeCreditsUsed > 0) {
-        // Edge function already deducted the correct batch amount — just track for UI
-        totalCreditsUsed += batchComments;
-      } else if (batchComments > 0 && jobId) {
-        // Edge function returned 0 credits_used — we handle deduction ourselves
-        const deductResult = await deductCreditsForBatch(
-          session.access_token,
-          jobId,
-          batchComments,
-          `Batch: ${batchComments} comments fetched — 1 credit per comment`,
-        );
-
-        if (!deductResult.ok) {
-          // Out of credits mid-scrape
-          const have = deductResult.balance ?? 0;
-          const need = batchComments;
-          setIsRunning(false);
-          refetchBalance();
-
-          if (totalComments >= 100) {
-            // Have enough partial data — show it
-            setIsPartialResult(true);
-            setState("completed");
-            toast.warning(
-              `Ran out of credits at ${totalComments.toLocaleString()} comments. Showing what was collected.`,
-              {
-                duration: 7000,
-                action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
-              }
-            );
-          } else {
-            setState("input");
-            setActiveJobId(null);
-            setActiveJob(null);
-            toast.error(
-              `Ran out of credits. You need ${Math.max(0, need - have).toLocaleString()} more credits.`,
-              {
-                duration: 7000,
-                action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
-              }
-            );
-          }
-          return;
-        }
-
-        totalCreditsUsed += batchComments;
-      }
-
-      setLiveCreditsUsed(totalCreditsUsed);
+      // ── IMPORTANT: check done/cancelled BEFORE credit accounting ──
+      // The edge function handles all credit deductions itself. Our job here is
+      // only to track what was downloaded for the live UI counter.
+      // Checking done/cancelled first ensures a completed scrape ALWAYS reaches
+      // the success state — a credit edge-case can never mask a successful result.
 
       if (result.cancelled) {
-        toast.info("Job was cancelled.");
-        setState("input");
         setIsRunning(false);
+        if (totalComments >= 100 && jobId) {
+          setIsPartialResult(true);
+          setState("completed");
+          toast.warning(
+            `Job cancelled at ${totalComments.toLocaleString()} comments. Showing available data.`,
+            { duration: 6000 }
+          );
+        } else {
+          setState("input");
+          setActiveJobId(null);
+          setActiveJob(null);
+          toast.info("Job cancelled.");
+        }
         return;
       }
 
       if (result.done) {
+        // Scrape fully completed — always show success, no partial banner
         toast.success(`✓ ${totalComments.toLocaleString()} comments scraped!`);
         setState("completed");
         setIsRunning(false);
         refetchBalance();
         return;
       }
+
+      // Track credits for the live counter (edge fn already deducted server-side)
+      const batchComments = Math.max(0, totalComments - prevTotalComments);
+      totalCreditsUsed += batchComments;
+      setLiveCreditsUsed(totalCreditsUsed);
 
       await new Promise((r) => setTimeout(r, 500));
     }

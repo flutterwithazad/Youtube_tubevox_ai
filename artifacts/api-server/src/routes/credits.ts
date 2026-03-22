@@ -65,36 +65,14 @@ router.post('/deduct', async (req, res) => {
     const deductResult = result as { ok: boolean; balance: number; needed?: number; deducted?: number };
 
     if (!deductResult.ok) {
-      // Drain any remaining balance to zero so users cannot re-scrape for free.
-      // Without this, a user with 100 credits and a 115-comment batch would keep
-      // their 100 credits and repeat the exploit indefinitely.
-      const remaining = deductResult.balance ?? 0;
-      let finalBalance = 0;
-      let actuallyDeducted = 0;
-
-      if (remaining > 0) {
-        const { data: drainResult } = await supabase.rpc('atomic_credit_deduct', {
-          p_user_id: user.id,
-          p_batch_size: remaining,
-          p_source_id: job_id,
-          p_description: `Credits exhausted: drained remaining ${remaining} credits`,
-        });
-        const drain = drainResult as { ok: boolean; balance: number } | null;
-        finalBalance = drain?.balance ?? 0;
-        if (drain?.ok) actuallyDeducted = remaining;
-
-        // Record the partial deduction in jobs.credits_used
-        if (actuallyDeducted > 0) {
-          const partial = (job.credits_used ?? 0) + actuallyDeducted;
-          await supabase.from('jobs').update({ credits_used: partial }).eq('id', job_id);
-        }
-      }
-
+      // Deduction failed — the edge function handles its own credit checks server-side,
+      // so this path is rare. Return the current balance without draining anything.
+      // (Draining caused false "insufficient_credits" errors on subsequent batches.)
       return res.status(402).json({
         error: 'insufficient_credits',
-        balance: finalBalance,
+        balance: deductResult.balance ?? 0,
         credits_needed: amount,
-        deducted: actuallyDeducted,
+        deducted: 0,
       });
     }
 
