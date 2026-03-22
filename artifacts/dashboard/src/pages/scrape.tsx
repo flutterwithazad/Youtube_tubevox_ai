@@ -149,17 +149,21 @@ export default function Scrape() {
     { id: 'custom' as const, label: 'Custom', sub: 'Enter amount'  },
   ];
 
-  // Submit validation — allow submit even when shortfall; edge fn returns the error
+  // Minimum 100 credits required to start any scrape
+  const hasMinCredits = balance >= 100;
+
   const urlValid = videoPreview !== null && !urlError;
 
-  const canSubmit = urlValid && !isRunning && (
+  const canSubmit = hasMinCredits && urlValid && !isRunning && (
     selectedChip === 'all'
     || selectedChip === 5000
     || selectedChip === 10000
     || (selectedChip === 'custom' && !!customAmount && parseInt(customAmount) >= 100)
   );
 
-  const disabledReason = !urlValid
+  const disabledReason = !hasMinCredits
+    ? `You need minimum 100 credits to start a scrape (you have ${balance})`
+    : !urlValid
     ? 'Enter a valid YouTube URL first'
     : selectedChip === 'custom' && (!customAmount || parseInt(customAmount) < 100)
     ? 'Enter an amount (minimum 100 comments)'
@@ -757,25 +761,45 @@ export default function Scrape() {
                   )}
                 </div>
 
-                {/* ── CHANGE 5: Richer credit status line ── */}
-                <div className="flex items-center justify-between text-sm px-1">
-                  <div className="flex items-center gap-1.5 text-gray-500">
-                    <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
-                    </svg>
-                    <span>
-                      You have{' '}
-                      <span className="font-semibold text-gray-900">{balance.toLocaleString()}</span>
-                      {' '}credits available
-                    </span>
+                {/* Credit status — error banner if below minimum, normal info otherwise */}
+                {!hasMinCredits ? (
+                  <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                    <div className="flex items-center gap-2.5">
+                      <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                      </svg>
+                      <div>
+                        <p className="text-sm font-semibold text-red-800">Not enough credits</p>
+                        <p className="text-xs text-red-600">You have <strong>{balance.toLocaleString()}</strong> credits. Minimum <strong>100</strong> required to start a scrape.</p>
+                      </div>
+                    </div>
+                    <a
+                      href="/dashboard/credits"
+                      className="shrink-0 ml-4 bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      Buy Credits →
+                    </a>
                   </div>
-                  <a
-                    href="/dashboard/credits"
-                    className="text-red-600 hover:text-red-700 font-medium transition-colors text-xs"
-                  >
-                    Get more →
-                  </a>
-                </div>
+                ) : (
+                  <div className="flex items-center justify-between text-sm px-1">
+                    <div className="flex items-center gap-1.5 text-gray-500">
+                      <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                      </svg>
+                      <span>
+                        You have{' '}
+                        <span className="font-semibold text-gray-900">{balance.toLocaleString()}</span>
+                        {' '}credits available
+                      </span>
+                    </div>
+                    <a
+                      href="/dashboard/credits"
+                      className="text-red-600 hover:text-red-700 font-medium transition-colors text-xs"
+                    >
+                      Get more →
+                    </a>
+                  </div>
+                )}
 
               </div>
             </div>
