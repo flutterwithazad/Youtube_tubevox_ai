@@ -194,16 +194,24 @@ export default function Scrape() {
 
         if (!response.ok || result.error) {
           if (result.error === "insufficient_credits") {
+            const have = typeof result.balance === 'number' ? result.balance : balance;
+            const need = typeof result.credits_needed === 'number' ? result.credits_needed : (maxComments ?? 0);
+            const shortfall = Math.max(0, need - have);
             toast.error(
-              `Not enough credits. You need ${result.credits_needed?.toLocaleString() ?? 'more'} credits but have ${balance.toLocaleString()}.`,
+              shortfall > 0
+                ? `You need ${shortfall.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
+                : `Not enough credits. Please buy more to continue.`,
               {
-                action: { label: 'Buy credits', onClick: () => { window.location.href = '/dashboard/credits'; } },
-                duration: 6000,
+                duration: 7000,
+                action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
               }
             );
-          } else {
-            toast.error(result.message ?? result.error ?? "Scraping failed");
+            // Stay on the form — this is NOT a scrape failure
+            setState("input");
+            setIsRunning(false);
+            return;
           }
+          toast.error(result.message ?? result.error ?? "Scraping failed");
           setState("failed");
           setIsRunning(false);
           return;
@@ -286,6 +294,16 @@ export default function Scrape() {
     setCustomAmount('');
     setActiveJobId(null);
     setActiveJob(null);
+  };
+
+  // Try Again keeps URL + video preview so the user doesn't have to re-enter
+  const handleTryAgain = () => {
+    setState("input");
+    setIsRunning(false);
+    setActiveJobId(null);
+    setActiveJob(null);
+    setLiveCommentCount(0);
+    setLiveCreditsUsed(0);
   };
 
   const progressPercent = activeJob?.requested_comments
@@ -750,7 +768,7 @@ export default function Scrape() {
             <h2 className="text-xl font-bold text-foreground mb-2">Scrape Failed</h2>
             <p className="text-muted-foreground mb-6">Something went wrong. Please try again.</p>
             <button
-              onClick={handleReset}
+              onClick={handleTryAgain}
               className="bg-primary text-white px-6 py-2.5 rounded-xl font-bold hover:bg-primary/90 transition-colors"
             >
               Try Again

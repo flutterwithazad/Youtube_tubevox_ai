@@ -1,0 +1,143 @@
+# YTScraper — Fix "Scrape Failed" screen for insufficient credits
+# Paste into Replit Agent
+# Only fix the error handling in the scrape submission logic
+# Do NOT touch any UI, chips, or other pages
+
+---
+
+## THE PROBLEM
+
+When user clicks "Scrape Now" without enough credits, the edge function
+returns { error: "insufficient_credits" } but the frontend is treating
+it as a generic failure and showing the "Scrape Failed" full-screen error state.
+
+It should instead:
+1. Stay on the form (State A — do NOT transition to the failure screen)
+2. Show a toast with the exact shortfall + "Buy credits" action
+3. NOT create any job row or deduct any credits
+
+---
+
+## THE FIX
+
+Find the scrape submission function (handleSubmit or runScrapeJob or similar).
+Inside the edge function response handling, add a special case for
+`insufficient_credits` BEFORE the generic error handler.
+
+The key rule: insufficient_credits is NOT a scrape failure.
+It means the user needs to top up. Keep them on the input form.
+
+### Find this pattern in your code (the edge function response handler):
+
+```typescript
+// You likely have something like this:
+if (!response.ok || result.error) {
+  onError(result.error ?? result.message ?? 'Scraping failed')
+  return
+}
+```
+
+### Replace it with this:
+
+```typescript
+if (!response.ok || result.error) {
+
+  // ── Special case: insufficient credits ──────────────────
+  // Do NOT show the failure screen for this.
+  // Stay on the form and show a helpful toast instead.
+  if (result.error === 'insufficient_credits') {
+    const have    = result.balance ?? balance
+    const need    = typeof result.credits_needed === 'number'
+      ? result.credits_needed
+      : maxComments ?? 0
+    const shortfall = Math.max(0, need - have)
+
+    toast.error(
+      shortfall > 0
+        ? `You need ${shortfall.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
+        : `Not enough credits. Please buy more to continue.`,
+      {
+        duration: 7000,
+        action: {
+          label: 'Buy credits →',
+          onClick: () => router.push('/dashboard/credits'),
+        },
+      }
+    )
+
+    // IMPORTANT: stay on the form — do NOT call onError()
+    // Reset running state so the button becomes active again
+    setIsRunning(false)
+    setScrapeState('idle')  // or whatever your idle state variable is called
+    return
+  }
+
+  // ── All other errors → show failure screen as before ────
+  onError(result.error ?? result.message ?? 'Scraping failed')
+  return
+}
+```
+
+---
+
+## ALSO CHECK: job creation order
+
+Make sure the job row is only created AFTER a successful first response
+from the edge function — not before calling it.
+
+If your code does this:
+```typescript
+// 1. Insert job into jobs table
+// 2. Deduct credits from credit_ledger
+// 3. Call edge function
+```
+
+That is wrong for the insufficient_credits case — you'd create a ghost job
+and deduct credits before knowing if the user can afford it.
+
+The edge function itself creates the job row internally (it does the INSERT
+into jobs table). So the frontend should:
+```typescript
+// CORRECT ORDER:
+// 1. Call edge function with { videoUrl, maxComments, filters }
+// 2. Edge function creates job + handles credits internally
+// 3. Frontend only updates UI based on the response
+```
+
+If you have any frontend code that inserts into the `jobs` table or
+`credit_ledger` table before calling the edge function — REMOVE it.
+The edge function handles all of that atomically.
+
+---
+
+## ALSO FIX: the "Try Again" button behavior
+
+The "Try Again" button on the failure screen currently just reloads.
+Fix it to reset back to the input form (State A) instead:
+
+```typescript
+// The Try Again button onClick:
+const handleTryAgain = () => {
+  setScrapeState('idle')      // go back to State A (the form)
+  setActiveJobId(null)
+  setActiveJob(null)
+  setIsRunning(false)
+  setLiveCommentCount(0)
+  setLiveCreditsUsed(0)
+  // Do NOT clear the URL or video preview — keep them so user doesn't have to re-enter
+}
+```
+
+---
+
+## SUMMARY OF CHANGES
+
+1. In edge function response handler: detect `error === 'insufficient_credits'`
+   → show toast with exact shortfall + "Buy credits" action button
+   → stay on the form (do NOT transition to failure screen)
+   → reset isRunning to false
+
+2. Remove any frontend code that inserts into jobs or credit_ledger
+   before the edge function call (edge function does this internally)
+
+3. "Try Again" button → resets to State A (form) keeping the URL intact
