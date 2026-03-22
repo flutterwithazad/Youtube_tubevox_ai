@@ -12,8 +12,9 @@ interface CreditPackage {
   id: string;
   name: string;
   description?: string;
-  credits: number;
-  price_usd: number;
+  credits_amount: number;
+  price: number;
+  currency?: string;
   sort_order?: number;
   is_popular?: boolean;
   stripe_price_id?: string;
@@ -169,12 +170,12 @@ export default function Credits() {
                   {pkg.description && <p className="text-sm text-muted-foreground mb-4">{pkg.description}</p>}
                   <div className="mb-4 flex items-baseline gap-1">
                     <span className={`font-mono font-bold ${isPopular ? "text-4xl text-primary" : "text-3xl text-foreground"}`}>
-                      {pkg.credits.toLocaleString()}
+                      {(pkg.credits_amount ?? 0).toLocaleString()}
                     </span>
                     <span className="text-muted-foreground">credits</span>
                   </div>
                   <div className="mb-6">
-                    <span className="text-2xl font-bold text-foreground">${pkg.price_usd}</span>
+                    <span className="text-2xl font-bold text-foreground">${pkg.price}</span>
                   </div>
                   <button
                     onClick={() => handleBuy(pkg)}
