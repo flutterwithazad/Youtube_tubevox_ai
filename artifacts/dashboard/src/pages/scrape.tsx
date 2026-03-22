@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { extractVideoId } from "@/lib/utils/youtube";
+import { extractVideoId, getVideoType } from "@/lib/utils/youtube";
+import { fetchVideoPreview, VideoPreview } from "@/lib/utils/youtubeOembed";
 import { toast } from "sonner";
-import { Settings, ArrowRight, Loader2, StopCircle, CheckCircle2 } from "lucide-react";
+import { Settings, Loader2, StopCircle, CheckCircle2 } from "lucide-react";
 import { CommentExplorer } from "@/components/dashboard/CommentExplorer";
 import { useAuth } from "@/hooks/use-auth";
 import { useCredits } from "@/hooks/use-credits";
@@ -28,21 +29,27 @@ export default function Scrape() {
   const { balance, refetch: refetchBalance } = useCredits(user?.id);
 
   const [state, setState] = useState<ScrapeState>("input");
-  const [url, setUrl] = useState("");
-  const [amount, setAmount] = useState(1000);
-  const [showOptions, setShowOptions] = useState(false);
 
+  // URL state
+  const [videoUrl, setVideoUrl] = useState("");
+  const [videoId, setVideoId] = useState<string | null>(null);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [videoPreview, setVideoPreview] = useState<VideoPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Chip state
+  const [selectedChip, setSelectedChip] = useState<'all' | 5000 | 10000 | 'custom'>('all');
+  const [customAmount, setCustomAmount] = useState<string>('');
+  const [customError, setCustomError] = useState<string | null>(null);
+
+  // Job state
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(null);
   const [liveCommentCount, setLiveCommentCount] = useState(0);
   const [liveCreditsUsed, setLiveCreditsUsed] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const abortRef = useRef(false);
-
-  // Show options when URL is valid
-  useEffect(() => {
-    setShowOptions(!!extractVideoId(url));
-  }, [url]);
 
   // On load: check for an existing active job
   useEffect(() => {
@@ -66,6 +73,92 @@ export default function Scrape() {
     checkActive();
   }, [user]);
 
+  // Debounced URL handler
+  const handleUrlChange = (value: string) => {
+    setVideoUrl(value);
+    setUrlError(null);
+    setVideoPreview(null);
+    setVideoId(null);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!value.trim()) return;
+
+    debounceRef.current = setTimeout(async () => {
+      const id = extractVideoId(value.trim());
+      if (!id) {
+        setUrlError('Please enter a valid YouTube video or Shorts URL');
+        return;
+      }
+      setVideoId(id);
+      setPreviewLoading(true);
+      const preview = await fetchVideoPreview(id);
+      setPreviewLoading(false);
+      if (!preview) {
+        setUrlError('Could not load video info. The video may be private or unavailable.');
+        return;
+      }
+      setVideoPreview({ ...preview, type: getVideoType(value) });
+    }, 600);
+  };
+
+  // Derived chip values
+  const maxComments: number | null = (() => {
+    if (selectedChip === 'all') return null;
+    if (selectedChip === 'custom') {
+      const n = parseInt(customAmount);
+      return isNaN(n) ? null : n;
+    }
+    return selectedChip;
+  })();
+
+  const isAffordable = maxComments === null
+    ? balance > 0
+    : balance >= maxComments;
+
+  const balanceAfter = maxComments !== null ? balance - maxComments : 0;
+
+  const chips = [
+    { id: 'all' as const,    label: 'All',    sublabel: 'Every comment', disabled: balance === 0 },
+    { id: 5000 as const,     label: '5,000',  sublabel: '5K comments',   disabled: balance < 5000 },
+    { id: 10000 as const,    label: '10,000', sublabel: '10K comments',  disabled: balance < 10000 },
+    { id: 'custom' as const, label: 'Custom', sublabel: 'Enter amount',  disabled: balance === 0 },
+  ];
+
+  const handleCustomAmountChange = (value: string) => {
+    setCustomError(null);
+    const clean = value.replace(/[^0-9]/g, '');
+    const n = parseInt(clean);
+    if (clean && n > balance) {
+      setCustomError(`You only have ${balance.toLocaleString()} credits available`);
+      setCustomAmount(String(balance));
+    } else {
+      setCustomAmount(clean);
+      if (clean && n < 100) {
+        setCustomError('Minimum is 100 comments');
+      }
+    }
+  };
+
+  // Submit validation
+  const urlValid = videoPreview !== null && !urlError;
+  const amountValid = selectedChip === 'all'
+    ? balance > 0
+    : selectedChip === 'custom'
+    ? !!customAmount && parseInt(customAmount) >= 100 && parseInt(customAmount) <= balance
+    : balance >= selectedChip;
+
+  const canSubmit = urlValid && amountValid && !isRunning;
+
+  const disabledReason = !urlValid
+    ? 'Enter a valid YouTube URL first'
+    : !amountValid
+    ? selectedChip === 'custom' && !customAmount
+      ? 'Enter a custom amount'
+      : 'Not enough credits'
+    : isRunning
+    ? 'Scrape in progress...'
+    : null;
+
   const fetchJobDetails = async (jobId: string) => {
     const { data } = await supabase.from("jobs").select("*").eq("id", jobId).single();
     if (data) setActiveJob(data);
@@ -75,6 +168,12 @@ export default function Scrape() {
     if (!user) return;
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { toast.error("Not authenticated"); return; }
+
+    const finalMaxComments: number | null = (() => {
+      if (selectedChip === 'all') return null;
+      if (selectedChip === 'custom') return parseInt(customAmount);
+      return selectedChip;
+    })();
 
     let jobId: string | null = null;
     let pageToken: string | null = null;
@@ -88,8 +187,8 @@ export default function Scrape() {
       invocationCount++;
 
       const body: Record<string, unknown> = {
-        videoUrl: url,
-        maxComments: amount,
+        videoUrl,
+        maxComments: finalMaxComments,
         filters: {},
       };
       if (jobId) body.jobId = jobId;
@@ -159,12 +258,8 @@ export default function Scrape() {
     setIsRunning(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!extractVideoId(url)) { toast.error("Please enter a valid YouTube URL"); return; }
-    if (balance < amount) { toast.error("Insufficient credits for this job."); return; }
-    if (isRunning) return;
-
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
     abortRef.current = false;
     setIsRunning(true);
     setLiveCommentCount(0);
@@ -190,6 +285,19 @@ export default function Scrape() {
     toast.info("Job cancelled.");
   };
 
+  const handleReset = () => {
+    setState("input");
+    setVideoUrl('');
+    setVideoId(null);
+    setUrlError(null);
+    setVideoPreview(null);
+    setSelectedChip('all');
+    setCustomAmount('');
+    setCustomError(null);
+    setActiveJobId(null);
+    setActiveJob(null);
+  };
+
   const progressPercent = activeJob?.requested_comments
     ? Math.min(100, Math.round((liveCommentCount / activeJob.requested_comments) * 100))
     : null;
@@ -210,79 +318,321 @@ export default function Scrape() {
             </div>
 
             <div className="bg-card rounded-2xl shadow-xl shadow-black/5 border border-border overflow-hidden">
-              <form onSubmit={handleSubmit} className="p-2">
-                <div className="flex flex-col sm:flex-row gap-2 relative">
-                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/50 pointer-events-none hidden sm:block">
-                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M21.582 6.186a2.605 2.605 0 0 0-1.838-1.838C18.122 4 12 4 12 4s-6.122 0-7.744.348a2.605 2.605 0 0 0-1.838 1.838C2 7.808 2 12 2 12s0 4.192.348 5.814a2.605 2.605 0 0 0 1.838 1.838C5.878 20 12 20 12 20s6.122 0 7.744-.348a2.605 2.605 0 0 0 1.838-1.838C22 16.192 22 12 22 12s0-4.192-.348-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-                    </svg>
-                  </div>
-                  <input
-                    type="url"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://www.youtube.com/watch?v=..."
-                    className="flex-1 bg-background border-none text-foreground px-4 sm:pl-12 py-4 rounded-xl focus:ring-4 focus:ring-primary/10 transition-all font-medium placeholder:font-normal placeholder:text-muted-foreground outline-none"
-                    required
-                  />
-                  <button
-                    type="submit"
-                    disabled={isRunning}
-                    className="bg-primary hover:bg-primary/90 text-white px-8 py-4 rounded-xl font-bold transition-all shadow-md shadow-primary/20 flex items-center justify-center gap-2 shrink-0 hover:translate-y-[-1px] active:translate-y-0 group disabled:opacity-50"
-                  >
-                    Scrape Now
-                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                  </button>
-                </div>
-              </form>
+              <div className="p-6 space-y-6">
 
-              {showOptions && (
-                <div className="border-t border-border bg-secondary/30 p-6 animate-in slide-in-from-top-4 duration-300">
-                  <div className="mb-6">
-                    <div className="flex justify-between items-end mb-4">
-                      <div>
-                        <label className="block font-bold text-foreground mb-1">Target amount</label>
-                        <p className="text-sm text-muted-foreground">How many comments do you need?</p>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-mono text-xl font-bold text-foreground">{amount.toLocaleString()}</div>
-                      </div>
+                {/* ── CHANGE 1: URL input with real-time video preview ── */}
+                <div className="space-y-3">
+                  <div className={`flex items-center gap-3 border-2 rounded-xl px-4 py-3 transition-all ${
+                    urlError
+                      ? 'border-red-400 bg-red-50'
+                      : videoPreview
+                      ? 'border-green-400 bg-green-50'
+                      : 'border-gray-200 bg-white focus-within:border-red-400'
+                  }`}>
+                    <div className="flex-shrink-0">
+                      {urlError ? (
+                        <svg className="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        </svg>
+                      ) : videoPreview ? (
+                        <svg className="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                      ) : (
+                        <svg className="w-5 h-5 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M21.582 6.186a2.506 2.506 0 00-1.768-1.768C18.254 4 12 4 12 4s-6.254 0-7.814.418a2.506 2.506 0 00-1.768 1.768C2 7.746 2 12 2 12s0 4.254.418 5.814a2.506 2.506 0 001.768 1.768C5.746 20 12 20 12 20s6.254 0 7.814-.418a2.506 2.506 0 001.768-1.768C22 16.254 22 12 22 12s0-4.254-.418-5.814zM9.75 15.02V8.98L15.5 12l-5.75 3.02z"/>
+                        </svg>
+                      )}
                     </div>
 
                     <input
-                      type="range"
-                      min="100" max="50000" step="100"
-                      value={amount}
-                      onChange={(e) => setAmount(parseInt(e.target.value))}
-                      className="w-full h-2 bg-border rounded-lg appearance-none cursor-pointer accent-primary"
+                      type="url"
+                      value={videoUrl}
+                      onChange={e => handleUrlChange(e.target.value)}
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      className="flex-1 bg-transparent outline-none text-gray-800 placeholder-gray-400 text-sm font-medium"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      spellCheck={false}
                     />
 
-                    <div className="flex justify-between mt-3 text-sm">
-                      <div className="text-muted-foreground">
-                        Cost: <span className="font-mono font-medium text-foreground">{amount.toLocaleString()} credits</span>
-                        <span className="text-xs text-muted-foreground ml-1">(1 credit = 1 comment)</span>
+                    {previewLoading && (
+                      <div className="flex-shrink-0">
+                        <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
                       </div>
-                      <div className={balance - amount >= 0 ? "text-success font-medium" : "text-destructive font-bold"}>
-                        Balance after: <span className="font-mono">{(balance - amount).toLocaleString()}</span>
+                    )}
+
+                    {videoUrl && !previewLoading && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoUrl('');
+                          setVideoId(null);
+                          setUrlError(null);
+                          setVideoPreview(null);
+                        }}
+                        className="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+
+                  {urlError && (
+                    <p className="text-sm text-red-600 flex items-center gap-1.5 px-1">
+                      <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      {urlError}
+                    </p>
+                  )}
+
+                  {videoPreview && !previewLoading && (
+                    <div className="flex items-center gap-4 bg-white border border-gray-200 rounded-xl p-3 shadow-sm">
+                      <div className="flex-shrink-0 relative">
+                        <img
+                          src={videoPreview.thumbnail}
+                          alt={videoPreview.title}
+                          className="w-24 h-[54px] object-cover rounded-lg bg-gray-100"
+                          onError={e => {
+                            const img = e.target as HTMLImageElement;
+                            img.src = `https://img.youtube.com/vi/${videoPreview.videoId}/default.jpg`;
+                          }}
+                        />
+                        {videoPreview.type === 'shorts' && (
+                          <span className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+                            SHORT
+                          </span>
+                        )}
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="w-6 h-6 bg-black/50 rounded-full flex items-center justify-center">
+                            <svg className="w-3 h-3 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M8 5v14l11-7z"/>
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate leading-tight">
+                          {videoPreview.title}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
+                          <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M21.582 6.186a2.506 2.506 0 00-1.768-1.768C18.254 4 12 4 12 4s-6.254 0-7.814.418a2.506 2.506 0 00-1.768 1.768C2 7.746 2 12 2 12s0 4.254.418 5.814a2.506 2.506 0 001.768 1.768C5.746 20 12 20 12 20s6.254 0 7.814-.418a2.506 2.506 0 001.768-1.768C22 16.254 22 12 22 12s0-4.254-.418-5.814zM9.75 15.02V8.98L15.5 12l-5.75 3.02z"/>
+                          </svg>
+                          {videoPreview.author}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-0.5 font-mono">
+                          ID: {videoPreview.videoId}
+                        </p>
+                      </div>
+
+                      <div className="flex-shrink-0">
+                        <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-100 px-2 py-1 rounded-full font-medium">
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                          Valid
+                        </span>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-border/50">
-                    <button type="button" className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-                      <Settings className="w-4 h-4" />
-                      Advanced options (Coming soon)
-                    </button>
-                  </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            <div className="text-center mt-6 text-sm text-muted-foreground flex items-center justify-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-primary/20 flex items-center justify-center">
-                <span className="w-1 h-1 rounded-full bg-primary"></span>
-              </span>
-              You have <span className="font-mono font-medium text-foreground">{balance.toLocaleString()}</span> credits available
+                {/* ── CHANGE 2: Chip-based comment count selector (visible when URL is valid) ── */}
+                {videoPreview && (
+                  <div className="space-y-4 border-t border-gray-100 pt-5">
+                    <div>
+                      <h3 className="text-base font-semibold text-gray-900">Target amount</h3>
+                      <p className="text-sm text-gray-500 mt-0.5">How many comments do you need?</p>
+                    </div>
+
+                    <div className="flex gap-2 flex-wrap">
+                      {chips.map(chip => (
+                        <button
+                          key={chip.id}
+                          type="button"
+                          disabled={chip.disabled}
+                          onClick={() => {
+                            if (chip.disabled) return;
+                            setSelectedChip(chip.id);
+                            setCustomAmount('');
+                            setCustomError(null);
+                          }}
+                          className={`
+                            flex flex-col items-center px-5 py-3 rounded-xl border-2 transition-all
+                            font-medium text-sm leading-tight
+                            ${chip.disabled
+                              ? 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
+                              : selectedChip === chip.id
+                              ? 'border-red-500 bg-red-50 text-red-700 shadow-sm'
+                              : 'border-gray-200 bg-white text-gray-700 hover:border-red-300 hover:bg-red-50/50 cursor-pointer'
+                            }
+                          `}
+                        >
+                          <span className="font-bold text-base leading-none">{chip.label}</span>
+                          <span className={`text-[11px] mt-1 leading-none ${
+                            chip.disabled ? 'text-gray-300' : selectedChip === chip.id ? 'text-red-500' : 'text-gray-400'
+                          }`}>
+                            {chip.disabled && chip.id !== 'all' && chip.id !== 'custom'
+                              ? `Need ${(chip.id as number).toLocaleString()} credits`
+                              : chip.sublabel
+                            }
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {selectedChip === 'custom' && (
+                      <div className="space-y-1.5">
+                        <div className={`flex items-center gap-3 border-2 rounded-xl px-4 py-3 bg-white transition-all ${
+                          customError ? 'border-red-400' : 'border-gray-200 focus-within:border-red-400'
+                        }`}>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={customAmount}
+                            onChange={e => handleCustomAmountChange(e.target.value)}
+                            placeholder={`Enter amount (max ${balance.toLocaleString()})`}
+                            className="flex-1 outline-none text-gray-900 font-semibold text-base bg-transparent placeholder-gray-300"
+                            autoFocus
+                          />
+                          <span className="text-sm text-gray-400 flex-shrink-0">comments</span>
+                        </div>
+                        {customError ? (
+                          <p className="text-xs text-red-600 flex items-center gap-1 px-1">
+                            <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                            </svg>
+                            {customError}
+                          </p>
+                        ) : customAmount && parseInt(customAmount) >= 100 ? (
+                          <p className="text-xs text-gray-500 px-1">
+                            Will use {parseInt(customAmount).toLocaleString()} credits
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-xl border border-gray-100">
+                      <div className="text-sm text-gray-600">
+                        <span className="font-medium">Cost: </span>
+                        <span className="font-mono font-semibold text-gray-900">
+                          {selectedChip === 'all'
+                            ? `up to ${balance.toLocaleString()} credits`
+                            : selectedChip === 'custom'
+                            ? customAmount
+                              ? `${parseInt(customAmount).toLocaleString()} credits`
+                              : '— credits'
+                            : `${selectedChip.toLocaleString()} credits`
+                          }
+                        </span>
+                        <span className="text-gray-400 text-xs ml-1">(1 credit = 1 comment)</span>
+                      </div>
+
+                      {selectedChip !== 'all' && (
+                        <div className={`text-sm font-medium ${isAffordable ? 'text-green-600' : 'text-red-600'}`}>
+                          {selectedChip === 'custom' && !customAmount
+                            ? null
+                            : isAffordable
+                            ? `Balance after: ${balanceAfter.toLocaleString()}`
+                            : '⚠ Insufficient credits'
+                          }
+                        </div>
+                      )}
+
+                      {selectedChip === 'all' && (
+                        <div className="text-sm text-gray-500">
+                          Budget: {balance.toLocaleString()} credits
+                        </div>
+                      )}
+                    </div>
+
+                    {!isAffordable && selectedChip !== 'all' && (
+                      <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                        <div className="flex items-center gap-2 text-sm text-red-700">
+                          <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                          Not enough credits for this amount
+                        </div>
+                        <a
+                          href="/dashboard/credits"
+                          className="text-sm font-semibold text-red-700 underline underline-offset-2 hover:text-red-800 transition-colors"
+                        >
+                          Buy credits →
+                        </a>
+                      </div>
+                    )}
+
+                    <div className="pt-2 border-t border-gray-100">
+                      <button type="button" className="flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors">
+                        <Settings className="w-4 h-4" />
+                        Advanced options (Coming soon)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── CHANGE 3: Scrape Now button with canSubmit/disabledReason ── */}
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    disabled={!canSubmit}
+                    onClick={handleSubmit}
+                    className={`
+                      w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl font-semibold text-base transition-all
+                      ${canSubmit
+                        ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm hover:shadow-md active:scale-[0.98]'
+                        : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                      }
+                    `}
+                  >
+                    {isRunning ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        Scraping...
+                      </>
+                    ) : (
+                      <>
+                        Scrape Now
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                        </svg>
+                      </>
+                    )}
+                  </button>
+
+                  {!canSubmit && disabledReason && (
+                    <p className="text-center text-xs text-gray-400 mt-2">{disabledReason}</p>
+                  )}
+                </div>
+
+                {/* ── CHANGE 5: Richer credit status line ── */}
+                <div className="flex items-center justify-between text-sm px-1">
+                  <div className="flex items-center gap-1.5 text-gray-500">
+                    <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                    </svg>
+                    <span>
+                      You have{' '}
+                      <span className="font-semibold text-gray-900">{balance.toLocaleString()}</span>
+                      {' '}credits available
+                    </span>
+                  </div>
+                  <a
+                    href="/dashboard/credits"
+                    className="text-red-600 hover:text-red-700 font-medium transition-colors text-xs"
+                  >
+                    Get more →
+                  </a>
+                </div>
+
+              </div>
             </div>
           </div>
         )}
@@ -368,7 +718,7 @@ export default function Scrape() {
                 </div>
               </div>
               <button
-                onClick={() => { setState("input"); setUrl(""); setAmount(1000); setActiveJobId(null); setActiveJob(null); }}
+                onClick={handleReset}
                 className="bg-background border border-border px-4 py-2 rounded-lg text-sm font-medium hover:bg-secondary transition-colors shrink-0"
               >
                 Start New Scrape
@@ -389,7 +739,7 @@ export default function Scrape() {
             <h2 className="text-xl font-bold text-foreground mb-2">Scrape Failed</h2>
             <p className="text-muted-foreground mb-6">Something went wrong. Please try again.</p>
             <button
-              onClick={() => { setState("input"); setActiveJobId(null); setActiveJob(null); }}
+              onClick={handleReset}
               className="bg-primary text-white px-6 py-2.5 rounded-xl font-bold hover:bg-primary/90 transition-colors"
             >
               Try Again

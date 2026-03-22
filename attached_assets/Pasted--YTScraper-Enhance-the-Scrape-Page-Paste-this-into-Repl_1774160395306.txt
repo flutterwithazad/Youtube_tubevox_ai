@@ -1,0 +1,693 @@
+# YTScraper — Enhance the Scrape Page
+# Paste this into Replit Agent
+# DO NOT rebuild the page from scratch — only modify the existing scrape page component
+# The page lives at /dashboard/scrape
+
+---
+
+## WHAT TO CHANGE
+
+Only modify the scrape page form area. Do not touch:
+- The sidebar
+- The topbar (credits pill + bell icon)
+- The heading "Scrape YouTube Comments"
+- The subtext
+- The "Scrape Now →" button logic
+- Any other page
+
+---
+
+## CHANGE 1 — URL INPUT WITH REAL-TIME VIDEO PREVIEW
+
+### Install this package
+```bash
+npm install get-youtube-id
+```
+
+### URL validation function
+Replace any existing YouTube URL validation with this exact function
+that handles all YouTube URL formats including Shorts:
+
+```typescript
+// lib/utils/youtube.ts
+
+export function extractVideoId(url: string): string | null {
+  if (!url || typeof url !== 'string') return null
+  const trimmed = url.trim()
+
+  const patterns = [
+    // Standard watch URL: youtube.com/watch?v=VIDEO_ID
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?(?:.*&)?v=([a-zA-Z0-9_-]{11})(?:&.*)?$/,
+    // Short URL: youtu.be/VIDEO_ID
+    /(?:https?:\/\/)?youtu\.be\/([a-zA-Z0-9_-]{11})(?:\?.*)?$/,
+    // Shorts URL: youtube.com/shorts/VIDEO_ID
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})(?:\?.*)?$/,
+    // Embed URL: youtube.com/embed/VIDEO_ID
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([a-zA-Z0-9_-]{11})(?:\?.*)?$/,
+    // Live URL: youtube.com/live/VIDEO_ID
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/live\/([a-zA-Z0-9_-]{11})(?:\?.*)?$/,
+    // Bare video ID (11 chars, alphanumeric + _ -)
+    /^([a-zA-Z0-9_-]{11})$/,
+  ]
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern)
+    if (match && match[1]) return match[1]
+  }
+  return null
+}
+
+export function isValidYouTubeUrl(url: string): boolean {
+  return extractVideoId(url) !== null
+}
+
+export function getVideoType(url: string): 'video' | 'shorts' | 'live' | 'unknown' {
+  if (!url) return 'unknown'
+  if (url.includes('/shorts/')) return 'shorts'
+  if (url.includes('/live/')) return 'live'
+  if (url.includes('watch?v=') || url.includes('youtu.be/')) return 'video'
+  return 'unknown'
+}
+```
+
+### Video preview card
+
+After the user types/pastes a URL, show a preview card BELOW the URL input.
+The preview is fetched from YouTube's oEmbed API (no API key needed — it's free and public).
+
+```typescript
+// lib/utils/youtubeOembed.ts
+
+export interface VideoPreview {
+  title: string
+  author: string        // channel name
+  thumbnail: string     // thumbnail URL
+  videoId: string
+  type: 'video' | 'shorts' | 'live' | 'unknown'
+}
+
+export async function fetchVideoPreview(videoId: string): Promise<VideoPreview | null> {
+  try {
+    // YouTube oEmbed — completely free, no API key needed
+    const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const data = await res.json()
+    return {
+      title:     data.title,
+      author:    data.author_name,
+      // oEmbed gives 480x360 thumbnail — upgrade to hqdefault (480x360 reliable)
+      thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      videoId,
+      type: 'video',
+    }
+  } catch {
+    return null
+  }
+}
+```
+
+### URL input + preview implementation
+
+In the scrape form component, replace the current URL input section with:
+
+```tsx
+'use client'
+import { useState, useEffect, useRef } from 'react'
+import { extractVideoId, isValidYouTubeUrl, getVideoType } from '@/lib/utils/youtube'
+import { fetchVideoPreview, VideoPreview } from '@/lib/utils/youtubeOembed'
+
+// State variables to add:
+const [videoUrl, setVideoUrl]           = useState('')
+const [videoId, setVideoId]             = useState<string | null>(null)
+const [urlError, setUrlError]           = useState<string | null>(null)
+const [videoPreview, setVideoPreview]   = useState<VideoPreview | null>(null)
+const [previewLoading, setPreviewLoading] = useState(false)
+const debounceRef = useRef<NodeJS.Timeout>()
+
+// Debounced URL handler — fires 600ms after user stops typing
+const handleUrlChange = (value: string) => {
+  setVideoUrl(value)
+  setUrlError(null)
+  setVideoPreview(null)
+  setVideoId(null)
+
+  if (debounceRef.current) clearTimeout(debounceRef.current)
+
+  if (!value.trim()) return
+
+  debounceRef.current = setTimeout(async () => {
+    const id = extractVideoId(value.trim())
+    if (!id) {
+      setUrlError('Please enter a valid YouTube video or Shorts URL')
+      return
+    }
+    setVideoId(id)
+    setPreviewLoading(true)
+    const preview = await fetchVideoPreview(id)
+    setPreviewLoading(false)
+    if (!preview) {
+      setUrlError('Could not load video info. The video may be private or unavailable.')
+      return
+    }
+    setVideoPreview({ ...preview, type: getVideoType(value) })
+  }, 600)
+}
+
+// Render — URL input section:
+return (
+  <div className="space-y-3">
+    {/* URL input row */}
+    <div className={`flex items-center gap-3 bg-white border-2 rounded-xl px-4 py-3 transition-all ${
+      urlError
+        ? 'border-red-400 bg-red-50'
+        : videoPreview
+        ? 'border-green-400 bg-green-50'
+        : 'border-gray-200 focus-within:border-red-400'
+    }`}>
+      {/* YouTube icon — gray if empty, red if valid, red-X if error */}
+      <div className="flex-shrink-0">
+        {urlError ? (
+          <svg className="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+          </svg>
+        ) : videoPreview ? (
+          <svg className="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M21.582 6.186a2.506 2.506 0 00-1.768-1.768C18.254 4 12 4 12 4s-6.254 0-7.814.418a2.506 2.506 0 00-1.768 1.768C2 7.746 2 12 2 12s0 4.254.418 5.814a2.506 2.506 0 001.768 1.768C5.746 20 12 20 12 20s6.254 0 7.814-.418a2.506 2.506 0 001.768-1.768C22 16.254 22 12 22 12s0-4.254-.418-5.814zM9.75 15.02V8.98L15.5 12l-5.75 3.02z"/>
+          </svg>
+        )}
+      </div>
+
+      <input
+        type="url"
+        value={videoUrl}
+        onChange={e => handleUrlChange(e.target.value)}
+        placeholder="https://www.youtube.com/watch?v=..."
+        className="flex-1 bg-transparent outline-none text-gray-800 placeholder-gray-400 text-sm font-medium"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+      />
+
+      {/* Loading spinner while fetching preview */}
+      {previewLoading && (
+        <div className="flex-shrink-0">
+          <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
+
+      {/* Clear button */}
+      {videoUrl && !previewLoading && (
+        <button
+          type="button"
+          onClick={() => {
+            setVideoUrl('')
+            setVideoId(null)
+            setUrlError(null)
+            setVideoPreview(null)
+          }}
+          className="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      )}
+    </div>
+
+    {/* Error message */}
+    {urlError && (
+      <p className="text-sm text-red-600 flex items-center gap-1.5 px-1">
+        <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+        </svg>
+        {urlError}
+      </p>
+    )}
+
+    {/* VIDEO PREVIEW CARD — shows after valid URL + successful oEmbed fetch */}
+    {videoPreview && !previewLoading && (
+      <div className="flex items-center gap-4 bg-white border border-gray-200 rounded-xl p-3 shadow-sm">
+        {/* Thumbnail */}
+        <div className="flex-shrink-0 relative">
+          <img
+            src={videoPreview.thumbnail}
+            alt={videoPreview.title}
+            className="w-24 h-[54px] object-cover rounded-lg bg-gray-100"
+            onError={e => {
+              // Fallback to default thumbnail if hqdefault fails
+              const img = e.target as HTMLImageElement
+              img.src = `https://img.youtube.com/vi/${videoPreview.videoId}/default.jpg`
+            }}
+          />
+          {/* Shorts badge */}
+          {videoPreview.type === 'shorts' && (
+            <span className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+              SHORT
+            </span>
+          )}
+          {/* Play overlay */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-6 h-6 bg-black/50 rounded-full flex items-center justify-center">
+              <svg className="w-3 h-3 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* Video info */}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-900 truncate leading-tight">
+            {videoPreview.title}
+          </p>
+          <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
+            <svg className="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M21.582 6.186a2.506 2.506 0 00-1.768-1.768C18.254 4 12 4 12 4s-6.254 0-7.814.418a2.506 2.506 0 00-1.768 1.768C2 7.746 2 12 2 12s0 4.254.418 5.814a2.506 2.506 0 001.768 1.768C5.746 20 12 20 12 20s6.254 0 7.814-.418a2.506 2.506 0 001.768-1.768C22 16.254 22 12 22 12s0-4.254-.418-5.814zM9.75 15.02V8.98L15.5 12l-5.75 3.02z"/>
+            </svg>
+            {videoPreview.author}
+          </p>
+          <p className="text-[10px] text-gray-400 mt-0.5 font-mono">
+            ID: {videoPreview.videoId}
+          </p>
+        </div>
+
+        {/* Verified badge */}
+        <div className="flex-shrink-0">
+          <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-100 px-2 py-1 rounded-full font-medium">
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+            </svg>
+            Valid
+          </span>
+        </div>
+      </div>
+    )}
+  </div>
+)
+```
+
+---
+
+## CHANGE 2 — REPLACE SLIDER WITH COMMENT COUNT CHIPS
+
+Remove the existing slider entirely.
+Replace the entire "Target amount" section with this chip-based selector.
+
+### Logic rules:
+- User's current credit balance = `balance` (already available in the component)
+- "All" chip → sets maxComments to `null` (fetch everything)
+- "5,000" chip → sets maxComments to 5000
+- "10,000" chip → sets maxComments to 10000
+- "Custom" chip → shows a number input below the chips
+- A chip is DISABLED if its value > balance (user cannot afford it)
+- "All" chip is DISABLED if balance === 0
+- Custom input: max value is capped at balance (cannot type more than they have)
+- If balance < 5000 and user picks "All" → that's fine (it will stop when credits run out)
+
+### Component implementation:
+
+```tsx
+// State variables:
+const [selectedChip, setSelectedChip] = useState<'all' | 5000 | 10000 | 'custom'>('all')
+const [customAmount, setCustomAmount] = useState<string>('')
+const [customError, setCustomError]   = useState<string | null>(null)
+
+// Derived value used when submitting:
+const maxComments: number | null = (() => {
+  if (selectedChip === 'all') return null
+  if (selectedChip === 'custom') {
+    const n = parseInt(customAmount)
+    return isNaN(n) ? null : n
+  }
+  return selectedChip
+})()
+
+// Credit cost display:
+const creditCost = maxComments ?? balance  // "All" costs up to full balance
+const estimatedCost = maxComments !== null
+  ? maxComments
+  : 'Up to ' + balance.toLocaleString()
+
+// Balance after:
+const balanceAfter = maxComments !== null ? balance - maxComments : 0
+const isAffordable = maxComments === null
+  ? balance > 0
+  : balance >= maxComments
+
+// Chip definitions:
+const chips = [
+  {
+    id: 'all' as const,
+    label: 'All',
+    sublabel: 'Every comment',
+    disabled: balance === 0,
+  },
+  {
+    id: 5000 as const,
+    label: '5,000',
+    sublabel: '5K comments',
+    disabled: balance < 5000,
+  },
+  {
+    id: 10000 as const,
+    label: '10,000',
+    sublabel: '10K comments',
+    disabled: balance < 10000,
+  },
+  {
+    id: 'custom' as const,
+    label: 'Custom',
+    sublabel: 'Enter amount',
+    disabled: balance === 0,
+  },
+]
+
+// Custom amount handler:
+const handleCustomAmountChange = (value: string) => {
+  setCustomError(null)
+  // Only allow digits
+  const clean = value.replace(/[^0-9]/g, '')
+  setCustomAmount(clean)
+
+  if (!clean) return
+
+  const n = parseInt(clean)
+  if (n < 100) {
+    setCustomError('Minimum is 100 comments')
+  } else if (n > balance) {
+    setCustomError(`You only have ${balance.toLocaleString()} credits available`)
+    // Cap the value to their balance
+    setCustomAmount(String(balance))
+  }
+}
+
+// Render — replace the existing Target amount section with:
+return (
+  <div className="space-y-4">
+    {/* Section label */}
+    <div>
+      <h3 className="text-base font-semibold text-gray-900">Target amount</h3>
+      <p className="text-sm text-gray-500 mt-0.5">How many comments do you need?</p>
+    </div>
+
+    {/* Chips row */}
+    <div className="flex gap-2 flex-wrap">
+      {chips.map(chip => (
+        <button
+          key={chip.id}
+          type="button"
+          disabled={chip.disabled}
+          onClick={() => {
+            if (chip.disabled) return
+            setSelectedChip(chip.id)
+            setCustomAmount('')
+            setCustomError(null)
+          }}
+          className={`
+            flex flex-col items-center px-5 py-3 rounded-xl border-2 transition-all
+            font-medium text-sm leading-tight
+            ${chip.disabled
+              ? 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
+              : selectedChip === chip.id
+              ? 'border-red-500 bg-red-50 text-red-700 shadow-sm'
+              : 'border-gray-200 bg-white text-gray-700 hover:border-red-300 hover:bg-red-50/50 cursor-pointer'
+            }
+          `}
+        >
+          <span className="font-bold text-base leading-none">{chip.label}</span>
+          <span className={`text-[11px] mt-1 leading-none ${
+            chip.disabled ? 'text-gray-300' : selectedChip === chip.id ? 'text-red-500' : 'text-gray-400'
+          }`}>
+            {chip.disabled && chip.id !== 'all' && chip.id !== 'custom'
+              ? `Need ${chip.id.toLocaleString()} credits`
+              : chip.sublabel
+            }
+          </span>
+        </button>
+      ))}
+    </div>
+
+    {/* Custom amount input — only shown when "Custom" chip is selected */}
+    {selectedChip === 'custom' && (
+      <div className="space-y-1.5">
+        <div className={`flex items-center gap-3 border-2 rounded-xl px-4 py-3 bg-white transition-all ${
+          customError ? 'border-red-400' : 'border-gray-200 focus-within:border-red-400'
+        }`}>
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={customAmount}
+            onChange={e => handleCustomAmountChange(e.target.value)}
+            placeholder={`Enter amount (max ${balance.toLocaleString()})`}
+            className="flex-1 outline-none text-gray-900 font-semibold text-base bg-transparent placeholder-gray-300"
+            autoFocus
+          />
+          <span className="text-sm text-gray-400 flex-shrink-0">comments</span>
+        </div>
+
+        {customError ? (
+          <p className="text-xs text-red-600 flex items-center gap-1 px-1">
+            <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            {customError}
+          </p>
+        ) : customAmount && parseInt(customAmount) >= 100 ? (
+          <p className="text-xs text-gray-500 px-1">
+            Will use {parseInt(customAmount).toLocaleString()} credits
+          </p>
+        ) : null}
+      </div>
+    )}
+
+    {/* Cost summary row */}
+    <div className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-xl border border-gray-100">
+      <div className="text-sm text-gray-600">
+        <span className="font-medium">Cost: </span>
+        <span className="font-mono font-semibold text-gray-900">
+          {selectedChip === 'all'
+            ? `up to ${balance.toLocaleString()} credits`
+            : selectedChip === 'custom'
+            ? customAmount
+              ? `${parseInt(customAmount).toLocaleString()} credits`
+              : '— credits'
+            : `${selectedChip.toLocaleString()} credits`
+          }
+        </span>
+        <span className="text-gray-400 text-xs ml-1">(1 credit = 1 comment)</span>
+      </div>
+
+      {/* Balance after — only show for fixed amounts */}
+      {selectedChip !== 'all' && (
+        <div className={`text-sm font-medium ${
+          isAffordable ? 'text-green-600' : 'text-red-600'
+        }`}>
+          {selectedChip === 'custom' && !customAmount
+            ? null
+            : isAffordable
+            ? `Balance after: ${(balanceAfter).toLocaleString()}`
+            : '⚠ Insufficient credits'
+          }
+        </div>
+      )}
+
+      {/* For "All" — just show current balance as the "budget" */}
+      {selectedChip === 'all' && (
+        <div className="text-sm text-gray-500">
+          Budget: {balance.toLocaleString()} credits
+        </div>
+      )}
+    </div>
+
+    {/* Insufficient credits warning + buy more CTA */}
+    {!isAffordable && selectedChip !== 'all' && (
+      <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-red-700">
+          <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+          </svg>
+          Not enough credits for this amount
+        </div>
+        <a
+          href="/dashboard/credits"
+          className="text-sm font-semibold text-red-700 underline underline-offset-2 hover:text-red-800 transition-colors"
+        >
+          Buy credits →
+        </a>
+      </div>
+    )}
+  </div>
+)
+```
+
+---
+
+## CHANGE 3 — SCRAPE NOW BUTTON VALIDATION
+
+The "Scrape Now →" button must be disabled and show a clear reason when:
+1. URL is empty or invalid
+2. No video preview loaded yet
+3. Custom chip selected but no valid amount entered
+4. Selected amount > user's balance (except "All" mode)
+5. A job is already running
+
+Update the button to:
+
+```tsx
+// Derive disabled state and reason:
+const urlValid   = videoPreview !== null && !urlError
+const amountValid = selectedChip === 'all'
+  ? balance > 0
+  : selectedChip === 'custom'
+  ? !!customAmount && parseInt(customAmount) >= 100 && parseInt(customAmount) <= balance
+  : balance >= selectedChip
+
+const canSubmit = urlValid && amountValid && !isRunning
+
+// Disable reason (shown as tooltip or small text under button):
+const disabledReason = !urlValid
+  ? 'Enter a valid YouTube URL first'
+  : !amountValid
+  ? selectedChip === 'custom' && !customAmount
+    ? 'Enter a custom amount'
+    : 'Not enough credits'
+  : isRunning
+  ? 'Scrape in progress...'
+  : null
+
+// Button:
+<button
+  type="button"
+  disabled={!canSubmit}
+  onClick={handleSubmit}
+  className={`
+    w-full flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl font-semibold text-base transition-all
+    ${canSubmit
+      ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm hover:shadow-md active:scale-[0.98]'
+      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+    }
+  `}
+>
+  {isRunning ? (
+    <>
+      <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+      Scraping...
+    </>
+  ) : (
+    <>
+      Scrape Now
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+      </svg>
+    </>
+  )}
+</button>
+
+{/* Show disabled reason */}
+{!canSubmit && disabledReason && (
+  <p className="text-center text-xs text-gray-400 mt-2">{disabledReason}</p>
+)}
+```
+
+---
+
+## CHANGE 4 — PASS CORRECT maxComments TO EDGE FUNCTION
+
+When submitting, pass `maxComments` correctly:
+
+```typescript
+const handleSubmit = async () => {
+  if (!canSubmit) return
+
+  // maxComments = null means "All" (fetch everything until credits run out)
+  const finalMaxComments: number | null = (() => {
+    if (selectedChip === 'all') return null
+    if (selectedChip === 'custom') return parseInt(customAmount)
+    return selectedChip  // 5000 or 10000
+  })()
+
+  // Pass to your existing runScrapeJob function:
+  await runScrapeJob({
+    videoUrl,
+    maxComments: finalMaxComments,
+    filters: {},
+    onProgress: ...,
+    onComplete: ...,
+    onError: ...,
+  })
+}
+```
+
+---
+
+## CHANGE 5 — BOTTOM CREDIT STATUS LINE
+
+Replace the existing "• You have 8 credits available" line with a richer version:
+
+```tsx
+<div className="flex items-center justify-between text-sm mt-2 px-1">
+  <div className="flex items-center gap-1.5 text-gray-500">
+    <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+      <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+    </svg>
+    <span>
+      You have{' '}
+      <span className="font-semibold text-gray-900">{balance.toLocaleString()}</span>
+      {' '}credits available
+    </span>
+  </div>
+  <a
+    href="/dashboard/credits"
+    className="text-red-600 hover:text-red-700 font-medium transition-colors text-xs"
+  >
+    Get more →
+  </a>
+</div>
+```
+
+---
+
+## PACKAGES — confirm installed (install if missing)
+
+```bash
+npm install get-youtube-id  # (optional helper, but the regex patterns above don't need it)
+```
+
+No additional packages needed. The oEmbed preview uses the browser's native fetch.
+Do NOT install youtube-dl, ytdl-core, or any server-side YouTube packages —
+the preview only needs the public oEmbed endpoint.
+
+---
+
+## FINAL LAYOUT ORDER (top to bottom inside the white card)
+
+1. URL input row (with live validation border colors)
+2. Error message (if URL invalid, red)
+3. Video preview card (if URL valid — thumbnail + title + channel + "Valid" badge)
+4. "Target amount" heading + subtext
+5. 4 chips: [All] [5,000] [10,000] [Custom]
+6. Custom number input (only when "Custom" chip selected)
+7. Cost summary row (cost + balance after)
+8. Insufficient credits warning (only if can't afford selected amount)
+9. Advanced options (keep as-is — "Coming soon")
+10. Scrape Now → button (red when can submit, gray when disabled)
+11. Disabled reason text (small, centered, only when button is disabled)
+12. "You have X credits · Get more →" bottom line
+
+---
+
+## DO NOT CHANGE
+
+- Sidebar navigation
+- Top bar (credits pill + bell)
+- Page heading "Scrape YouTube Comments"
+- Page subheading text
+- The job progress UI (State B — running job card)
+- The comment explorer (State C — after job completes)
+- Any other page (/dashboard/jobs, /dashboard/credits, /dashboard/settings)
