@@ -99,6 +99,72 @@ router.post('/deduct', async (req, res) => {
   }
 });
 
+// Simulate a purchase — adds credits directly without a payment gateway.
+// Replace this route's internals with a real Stripe/payment flow later.
+router.post('/purchase', async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+    }
+    const accessToken = authHeader.slice(7);
+
+    const userClient = getUserSupabase(accessToken);
+    const { data: { user }, error: authError } = await userClient.auth.getUser();
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    const { package_id } = req.body;
+    if (!package_id || typeof package_id !== 'string') {
+      return res.status(400).json({ error: 'package_id is required' });
+    }
+
+    const supabase = createSupabaseAdmin();
+
+    // Look up the package
+    const { data: pkg, error: pkgErr } = await supabase
+      .from('credit_packages')
+      .select('id, name, credits_amount, price')
+      .eq('id', package_id)
+      .maybeSingle();
+
+    if (pkgErr || !pkg) {
+      return res.status(404).json({ error: 'Package not found' });
+    }
+
+    // Get current balance for balance_after calculation
+    const { data: balData } = await supabase
+      .from('user_credit_balance')
+      .select('balance')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    const currentBalance = balData?.balance ?? 0;
+
+    // Insert a positive ledger row (simulated purchase)
+    const { error: ledgerErr } = await supabase.from('credit_ledger').insert({
+      user_id:      user.id,
+      amount:       pkg.credits_amount,
+      source_type:  'purchase',
+      source_id:    pkg.id,
+      description:  `Purchased: ${pkg.name} — ${pkg.credits_amount.toLocaleString()} credits`,
+      balance_after: currentBalance + pkg.credits_amount,
+    });
+
+    if (ledgerErr) throw ledgerErr;
+
+    return res.json({
+      ok:      true,
+      credits: pkg.credits_amount,
+      balance: currentBalance + pkg.credits_amount,
+      package: pkg.name,
+    });
+  } catch (e: any) {
+    console.error('[credits/purchase] Unexpected error:', e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/balance', async (req, res) => {
   try {
     const authHeader = req.headers['authorization'];

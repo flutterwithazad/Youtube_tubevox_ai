@@ -1,5 +1,5 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { Zap, ArrowUpRight, ArrowDownRight, ShieldCheck, RefreshCw } from "lucide-react";
+import { Zap, ArrowUpRight, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
@@ -38,6 +38,8 @@ export default function Credits() {
   const [freeCredits, setFreeCredits] = useState<string>("...");
   const [historyLoading, setHistoryLoading] = useState(true);
   const [packagesLoading, setPackagesLoading] = useState(true);
+  const [confirmPkg, setConfirmPkg] = useState<CreditPackage | null>(null);
+  const [buying, setBuying] = useState(false);
 
   useEffect(() => {
     fetchPackages();
@@ -79,7 +81,40 @@ export default function Credits() {
   };
 
   const handleBuy = (pkg: CreditPackage) => {
-    toast.success(`Redirecting to checkout for ${pkg.name}… (Coming soon)`);
+    setConfirmPkg(pkg);
+  };
+
+  const handleConfirmBuy = async () => {
+    if (!confirmPkg || !user) return;
+    setBuying(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { toast.error("Not authenticated"); return; }
+
+      const res = await fetch('/api/credits/purchase', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ package_id: confirmPkg.id }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error ?? 'Purchase failed. Please try again.');
+        return;
+      }
+
+      setConfirmPkg(null);
+      toast.success(`${confirmPkg.credits_amount.toLocaleString()} credits added to your account!`, { duration: 5000 });
+      refetch();
+      fetchHistory();
+    } catch {
+      toast.error('Something went wrong. Please try again.');
+    } finally {
+      setBuying(false);
+    }
   };
 
   const sourceLabel = (type: string, desc?: string) => {
@@ -248,6 +283,90 @@ export default function Credits() {
           </table>
         </div>
       </div>
+      {/* ── Confirmation Dialog ── */}
+      {confirmPkg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => !buying && setConfirmPkg(null)}
+          />
+
+          {/* Dialog */}
+          <div className="relative bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in fade-in zoom-in-95 duration-200">
+            {/* Close button */}
+            <button
+              onClick={() => !buying && setConfirmPkg(null)}
+              disabled={buying}
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {/* Icon */}
+            <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+              <Zap className="w-6 h-6 text-primary" />
+            </div>
+
+            <h3 className="text-xl font-bold text-foreground mb-1">Confirm Purchase</h3>
+            <p className="text-sm text-muted-foreground mb-6">
+              You're about to add credits to your account.
+            </p>
+
+            {/* Package summary */}
+            <div className="bg-secondary/50 border border-border rounded-xl p-4 mb-6 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Package</span>
+                <span className="text-sm font-bold text-foreground">{confirmPkg.name}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Credits</span>
+                <span className="text-sm font-mono font-bold text-primary">
+                  +{confirmPkg.credits_amount.toLocaleString()}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Price</span>
+                <span className="text-sm font-bold text-foreground">${confirmPkg.price}</span>
+              </div>
+              <div className="border-t border-border/60 pt-2 mt-2 flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Balance after</span>
+                <span className="text-sm font-mono font-bold text-foreground">
+                  {(balance + confirmPkg.credits_amount).toLocaleString()} credits
+                </span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmPkg(null)}
+                disabled={buying}
+                className="flex-1 py-2.5 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmBuy}
+                disabled={buying}
+                className="flex-1 py-2.5 rounded-xl bg-primary hover:bg-primary/90 text-white text-sm font-bold transition-all shadow-md shadow-primary/25 hover:-translate-y-0.5 disabled:opacity-60 disabled:translate-y-0 flex items-center justify-center gap-2"
+              >
+                {buying ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Processing…
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    Confirm Purchase
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardShell>
   );
 }
