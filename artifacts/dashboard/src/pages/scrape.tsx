@@ -208,6 +208,27 @@ export default function Scrape() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { toast.error("Not authenticated"); return; }
 
+    // Server-side minimum credit check — enforced even if UI check is bypassed
+    try {
+      const balRes = await fetch('/api/credits/balance', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const balData = await balRes.json();
+      const serverBalance = balData.balance ?? 0;
+      if (serverBalance < 100) {
+        toast.error(`You need at least 100 credits to start a scrape. Current balance: ${serverBalance.toLocaleString()}.`, {
+          duration: 6000,
+          action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+        });
+        setState("input");
+        setIsRunning(false);
+        refetchBalance();
+        return;
+      }
+    } catch {
+      // If balance check fails, let the scrape proceed — the deduction step will catch it
+    }
+
     const finalMaxComments: number | null = (() => {
       if (selectedChip === 'all') return null;
       if (selectedChip === 'custom') return parseInt(customAmount);
