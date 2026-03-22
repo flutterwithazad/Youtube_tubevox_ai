@@ -172,9 +172,10 @@ serve(async (req) => {
     }
     await supabase.from("jobs").update(runningUpdate).eq("id", job.id);
 
-    let totalInserted = 0;  // count for THIS invocation only
-    let creditsUsed   = 0;
-    let isCancelled   = false;
+    let totalInserted  = 0;  // count for THIS invocation only
+    let creditsUsed    = 0;
+    let isCancelled    = false;
+    let creditExhausted = false;  // true when atomic_credit_deduct returns ok:false
 
     // ── 7. onBatch — insert comments + atomic credit deduction ──
     //
@@ -244,7 +245,8 @@ serve(async (req) => {
       }
 
       if (!deductResult?.ok) {
-        console.log(`Insufficient credits (balance=${deductResult?.balance})`);
+        console.log(`Insufficient credits (balance=${deductResult?.balance}) — flagging creditExhausted`);
+        creditExhausted = true;
         return false;
       }
 
@@ -292,11 +294,37 @@ serve(async (req) => {
       .from("jobs").select("status").eq("id", job.id).single();
     isCancelled = isCancelled || finalCheck?.status === "cancelled";
 
-    // done = no more pages AND not cancelled
-    const done = nextPageToken === null;
-
-    // Total across ALL invocations (previous + this one)
+    // Total across ALL invocations (previous + this one) — needed for all branches below
     const totalAcrossAllInvocations = alreadyFetched + totalInserted;
+    const finalBalance = balance - creditsUsed;
+
+    // ── Credits exhausted mid-scrape ─────────────────────────
+    // atomic_credit_deduct returned ok:false inside onBatch.
+    // fetchAllComments returned nextPageToken:null (same as "done") but the
+    // scrape was NOT naturally complete — credits simply ran out.
+    // Return 402 so the frontend shows "Partial Results" instead of "Completed".
+    if (creditExhausted && !isCancelled) {
+      await supabase.from("jobs").update({
+        status:              "cancelled",
+        downloaded_comments: totalAcrossAllInvocations,
+        completed_at:        new Date().toISOString(),
+        error_message:       "Scrape stopped: insufficient credits",
+      }).eq("id", job.id);
+
+      return json({
+        error:          "insufficient_credits",
+        message:        "Not enough credits to continue scraping.",
+        balance:        finalBalance,
+        credits_needed: 1,
+        job_id:         job.id,
+        comment_count:  totalAcrossAllInvocations,
+        credits_used:   creditsUsed,
+        balance_after:  finalBalance,
+      }, 402);
+    }
+
+    // done = no more pages AND not cancelled AND credits were not exhausted
+    const done = nextPageToken === null;
 
     if (!isCancelled) {
       if (done) {
@@ -321,7 +349,6 @@ serve(async (req) => {
     }
 
     // ── 11. Return result ────────────────────────────────────
-    const finalBalance = balance - creditsUsed;
     return json({
       success:       true,
       done,

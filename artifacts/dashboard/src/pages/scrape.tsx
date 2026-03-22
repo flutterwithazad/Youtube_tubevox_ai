@@ -271,7 +271,14 @@ export default function Scrape() {
         if (!response.ok || result.error) {
           if (result.error === "insufficient_credits") {
             // Edge function ran out of credits mid-scrape.
-            // If we already have data, show it as partial results — don't throw it away.
+            // The 402 response always includes job_id and comment_count so we can
+            // show the partial data even if this was the very first invocation.
+            if (result.job_id) jobId = result.job_id;
+            if (typeof result.comment_count === 'number' && result.comment_count > 0) {
+              totalComments = result.comment_count;
+              setLiveCommentCount(totalComments);
+              setActiveJobId(result.job_id);
+            }
             refetchBalance();
             setIsRunning(false);
             if (totalComments >= 100 && jobId) {
