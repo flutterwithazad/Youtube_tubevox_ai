@@ -30,7 +30,7 @@ function FinalCTA({ freeCredits, loading }: { freeCredits: string; loading: bool
           </div>
           <Reveal delay={200} className="shrink-0 flex flex-col items-center">
             <a
-              href="/dashboard/signup"
+              href="/signup"
               className="px-8 py-5 rounded-2xl font-bold text-lg bg-primary text-white shadow-[0_0_40px_rgba(99,102,241,0.3)] hover:shadow-[0_0_60px_rgba(99,102,241,0.5)] hover:-translate-y-1 transition-all active:translate-y-0 w-full md:w-auto text-center"
             >
               START FOR FREE →

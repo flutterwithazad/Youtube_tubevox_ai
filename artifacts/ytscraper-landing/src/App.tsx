@@ -7,28 +7,25 @@ import Landing from "@/pages/Landing";
 
 const queryClient = new QueryClient();
 
+function Redirect({ to }: { to: string }) {
+  window.location.replace(to);
+  return null;
+}
+
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Landing} />
-      {/* Fallback for the dummy dashboard/login routes requested in the prompt */}
-      <Route path="/dashboard" component={() => (
-        <div className="min-h-screen flex items-center justify-center flex-col gap-4">
-          <h1 className="text-2xl font-bold font-display">Dashboard / Sign Up</h1>
-          <p className="text-muted-foreground">This is a simulated page transition.</p>
-          <a href="/" className="text-primary hover:underline">Go back home</a>
-        </div>
-      )} />
+      <Route path="/login">
+        <Redirect to="/dashboard/login" />
+      </Route>
+      <Route path="/signup">
+        <Redirect to="/dashboard/signup" />
+      </Route>
       <Route path="/dashboard/scrape" component={() => (
         <div className="min-h-screen flex items-center justify-center flex-col gap-4">
           <h1 className="text-2xl font-bold font-display">Scraping Tool Initiated</h1>
           <p className="text-muted-foreground">URL parameter captured successfully.</p>
-          <a href="/" className="text-primary hover:underline">Go back home</a>
-        </div>
-      )} />
-      <Route path="/login" component={() => (
-        <div className="min-h-screen flex items-center justify-center flex-col gap-4">
-          <h1 className="text-2xl font-bold font-display">Login Portal</h1>
           <a href="/" className="text-primary hover:underline">Go back home</a>
         </div>
       )} />

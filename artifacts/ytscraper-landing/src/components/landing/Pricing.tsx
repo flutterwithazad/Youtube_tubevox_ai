@@ -67,7 +67,7 @@ export function Pricing({ freeCredits, packages, loading }: Props) {
               <p className="text-sm text-muted-foreground">Start scraping immediately. No payment required.</p>
             </div>
             <a
-              href="/dashboard/signup"
+              href="/signup"
               className="shrink-0 px-6 py-3 rounded-xl font-bold bg-primary text-primary-foreground hover:shadow-lg hover:-translate-y-0.5 transition-all whitespace-nowrap"
             >
               Start Free →
@@ -119,7 +119,7 @@ export function Pricing({ freeCredits, packages, loading }: Props) {
                     <p className="text-xs text-muted-foreground mb-6">{pricePerCredit(pkg)}</p>
 
                     <a
-                      href="/dashboard/signup"
+                      href="/signup"
                       className={`mt-auto block w-full py-3 px-6 text-center rounded-xl font-bold transition-all ${isHighlight
                         ? 'bg-primary text-primary-foreground hover:shadow-lg hover:-translate-y-0.5'
                         : 'bg-foreground text-background hover:bg-foreground/90'

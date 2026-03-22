@@ -59,7 +59,7 @@ export function DatasetPreview() {
         </Reveal>
 
         <Reveal delay={300} className="flex justify-center">
-          <a href="/dashboard/signup" className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold bg-white border-2 border-border hover:border-foreground hover:bg-card text-foreground transition-all shadow-sm">
+          <a href="/signup" className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold bg-white border-2 border-border hover:border-foreground hover:bg-card text-foreground transition-all shadow-sm">
             <Download className="w-4 h-4" />
             Download Sample Dataset
           </a>
