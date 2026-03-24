@@ -1,7 +1,7 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { Zap, ArrowUpRight, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2 } from "lucide-react";
+import { Zap, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useCredits } from "@/hooks/use-credits";
 import { supabase } from "@/lib/supabase";
@@ -24,22 +24,52 @@ interface LedgerRow {
   id: string;
   amount: number;
   source_type: string;
+  source_id?: string;
   description?: string;
   created_at: string;
   balance_after?: number;
 }
 
+interface JobRow {
+  id: string;
+  video_title?: string;
+  channel_name?: string;
+  thumbnail?: string;
+  downloaded_comments?: number;
+  status?: string;
+  created_at: string;
+}
+
+interface GroupedJobTx {
+  jobId: string;
+  totalSpent: number;
+  latestDate: string;
+  job?: JobRow;
+}
+
+const JOBS_PER_PAGE = 10;
+
 export default function Credits() {
   const { user } = useAuth();
   const { balance, loading: balanceLoading, refetch } = useCredits(user?.id);
 
-  const [packages, setPackages] = useState<CreditPackage[]>([]);
-  const [history, setHistory] = useState<LedgerRow[]>([]);
-  const [freeCredits, setFreeCredits] = useState<string>("...");
-  const [historyLoading, setHistoryLoading] = useState(true);
+  const [packages,       setPackages]       = useState<CreditPackage[]>([]);
+  const [freeCredits,    setFreeCredits]    = useState<string>("...");
   const [packagesLoading, setPackagesLoading] = useState(true);
-  const [confirmPkg, setConfirmPkg] = useState<CreditPackage | null>(null);
-  const [buying, setBuying] = useState(false);
+  const [confirmPkg,     setConfirmPkg]     = useState<CreditPackage | null>(null);
+  const [buying,         setBuying]         = useState(false);
+
+  // Transaction history state
+  const [historyLoading,   setHistoryLoading]   = useState(true);
+  const [jobTransactions,  setJobTransactions]  = useState<GroupedJobTx[]>([]);
+  const [creditRows,       setCreditRows]       = useState<LedgerRow[]>([]);
+  const [jobsPage,         setJobsPage]         = useState(0);
+
+  const paginatedJobs = useMemo(
+    () => jobTransactions.slice(jobsPage * JOBS_PER_PAGE, (jobsPage + 1) * JOBS_PER_PAGE),
+    [jobTransactions, jobsPage],
+  );
+  const totalPages = Math.ceil(jobTransactions.length / JOBS_PER_PAGE);
 
   useEffect(() => {
     fetchPackages();
@@ -71,13 +101,59 @@ export default function Credits() {
 
   const fetchHistory = async () => {
     setHistoryLoading(true);
-    const { data } = await supabase
-      .from("credit_ledger")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50);
-    setHistory(data ?? []);
-    setHistoryLoading(false);
+    try {
+      // Fetch ALL debit rows (job usage)
+      const { data: debits } = await supabase
+        .from("credit_ledger")
+        .select("*")
+        .lt("amount", 0)
+        .order("created_at", { ascending: false });
+
+      // Fetch all jobs for this user (to get titles + thumbnails)
+      const { data: jobs } = await supabase
+        .from("jobs")
+        .select("id, video_title, channel_name, thumbnail, downloaded_comments, status, created_at")
+        .order("created_at", { ascending: false });
+
+      // Group debit rows by source_id (job ID)
+      const grouped = new Map<string, GroupedJobTx>();
+      for (const row of debits ?? []) {
+        if (!row.source_id) continue;
+        const existing = grouped.get(row.source_id);
+        if (existing) {
+          existing.totalSpent += Math.abs(row.amount);
+          // keep the latest date
+          if (new Date(row.created_at) > new Date(existing.latestDate)) {
+            existing.latestDate = row.created_at;
+          }
+        } else {
+          grouped.set(row.source_id, {
+            jobId:      row.source_id,
+            totalSpent: Math.abs(row.amount),
+            latestDate: row.created_at,
+            job:        jobs?.find(j => j.id === row.source_id),
+          });
+        }
+      }
+
+      const sorted = Array.from(grouped.values()).sort(
+        (a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime(),
+      );
+      setJobTransactions(sorted);
+      setJobsPage(0);
+
+      // Fetch positive rows (purchases, grants, bonuses)
+      const { data: credits } = await supabase
+        .from("credit_ledger")
+        .select("*")
+        .gt("amount", 0)
+        .order("created_at", { ascending: false });
+      setCreditRows(credits ?? []);
+    } catch (e) {
+      console.error("fetchHistory:", e);
+    } finally {
+      setHistoryLoading(false);
+    }
   };
 
   const handleBuy = (pkg: CreditPackage) => {
@@ -117,14 +193,14 @@ export default function Credits() {
     }
   };
 
-  const sourceLabel = (type: string, desc?: string) => {
+  const creditLabel = (type: string, desc?: string) => {
     if (desc) return desc;
     switch (type) {
-      case "purchase": return "Credit Purchase";
+      case "purchase":    return "Credit Purchase";
       case "admin_grant": return "Admin Grant";
-      case "refund": return "Refund";
-      case "job_reserve": return "Scrape Job";
-      default: return type;
+      case "refund":      return "Refund";
+      case "signup":      return "Welcome bonus";
+      default:            return type;
     }
   };
 
@@ -232,55 +308,157 @@ export default function Credits() {
       </div>
 
       {/* Transaction History */}
-      <div>
-        <h3 className="text-xl font-display font-bold text-foreground mb-4">Transaction History</h3>
-        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-secondary/50 text-muted-foreground uppercase text-xs font-semibold">
-              <tr>
-                <th className="px-6 py-4">Date</th>
-                <th className="px-6 py-4">Description</th>
-                <th className="px-6 py-4 text-right">Amount</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {historyLoading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i}>
-                    <td className="px-6 py-4"><Skeleton className="h-4 w-32" /></td>
-                    <td className="px-6 py-4"><Skeleton className="h-4 w-48" /></td>
-                    <td className="px-6 py-4 text-right"><Skeleton className="h-4 w-16 ml-auto" /></td>
-                  </tr>
-                ))
-              ) : history.length === 0 ? (
+      <div className="space-y-8">
+        {/* Section 1: Credits spent (grouped by job) */}
+        <div>
+          <h3 className="text-xl font-display font-bold text-foreground mb-4">Credits Spent</h3>
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            {historyLoading ? (
+              Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-4 py-4 border-b border-border/50">
+                  <Skeleton className="w-14 h-10 rounded-md shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="h-3 w-32" />
+                  </div>
+                  <Skeleton className="h-5 w-20 shrink-0" />
+                  <Skeleton className="h-8 w-28 shrink-0 rounded-lg" />
+                </div>
+              ))
+            ) : jobTransactions.length === 0 ? (
+              <div className="px-6 py-12 text-center text-muted-foreground">
+                No scrape jobs yet. Start scraping to see your usage here.
+              </div>
+            ) : (
+              <>
+                {paginatedJobs.map((tx) => (
+                  <div
+                    key={tx.jobId}
+                    className="flex items-center justify-between py-4 px-4 border-b border-border/50 hover:bg-secondary/30 transition-colors last:border-b-0"
+                  >
+                    {/* Left: thumbnail + info */}
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      {tx.job?.thumbnail ? (
+                        <img
+                          src={tx.job.thumbnail}
+                          alt=""
+                          className="w-14 h-10 object-cover rounded-md shrink-0 bg-secondary"
+                        />
+                      ) : (
+                        <div className="w-14 h-10 bg-secondary rounded-md shrink-0 flex items-center justify-center">
+                          <PlayCircle className="w-5 h-5 text-muted-foreground/40" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-foreground truncate">
+                          {tx.job?.video_title ?? "Unknown video"}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {(tx.job?.downloaded_comments ?? 0).toLocaleString()} comments scraped
+                          {" · "}
+                          {formatDistanceToNow(new Date(tx.latestDate), { addSuffix: true })}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Right: credits + button */}
+                    <div className="flex items-center gap-3 shrink-0 ml-4">
+                      <span className="text-sm font-mono font-bold text-red-600 whitespace-nowrap">
+                        -{tx.totalSpent.toLocaleString()}
+                      </span>
+                      <a
+                        href={`/dashboard/jobs/${tx.jobId}`}
+                        className="text-xs font-semibold text-primary border border-primary/30 rounded-lg px-3 py-1.5 hover:bg-primary/5 transition-colors whitespace-nowrap"
+                      >
+                        View Comments →
+                      </a>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between px-4 py-3 border-t border-border/50 bg-secondary/20">
+                    <span className="text-xs text-muted-foreground">
+                      Showing {jobsPage * JOBS_PER_PAGE + 1}–
+                      {Math.min((jobsPage + 1) * JOBS_PER_PAGE, jobTransactions.length)} of{" "}
+                      {jobTransactions.length} jobs
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setJobsPage(p => Math.max(0, p - 1))}
+                        disabled={jobsPage === 0}
+                        className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg disabled:opacity-40 hover:bg-secondary transition-colors"
+                      >
+                        ← Previous
+                      </button>
+                      <button
+                        onClick={() => setJobsPage(p => Math.min(totalPages - 1, p + 1))}
+                        disabled={jobsPage === totalPages - 1}
+                        className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg disabled:opacity-40 hover:bg-secondary transition-colors"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Section 2: Credits received */}
+        <div>
+          <h3 className="text-xl font-display font-bold text-foreground mb-4">Credits Received</h3>
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-secondary/50 text-muted-foreground uppercase text-xs font-semibold">
                 <tr>
-                  <td colSpan={3} className="px-6 py-12 text-center text-muted-foreground">No transactions yet.</td>
+                  <th className="px-6 py-3">Date</th>
+                  <th className="px-6 py-3">Description</th>
+                  <th className="px-6 py-3 text-right">Amount</th>
                 </tr>
-              ) : (
-                history.map((tx) => {
-                  const isCredit = tx.amount > 0;
-                  return (
+              </thead>
+              <tbody className="divide-y divide-border/50">
+                {historyLoading ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <tr key={i}>
+                      <td className="px-6 py-4"><Skeleton className="h-4 w-28" /></td>
+                      <td className="px-6 py-4"><Skeleton className="h-4 w-40" /></td>
+                      <td className="px-6 py-4 text-right"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                    </tr>
+                  ))
+                ) : creditRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-6 py-10 text-center text-muted-foreground text-sm">
+                      No credits received yet.
+                    </td>
+                  </tr>
+                ) : (
+                  creditRows.map((tx) => (
                     <tr key={tx.id} className="hover:bg-secondary/30 transition-colors">
-                      <td className="px-6 py-4 text-muted-foreground whitespace-nowrap">
+                      <td className="px-6 py-4 text-xs text-muted-foreground whitespace-nowrap">
                         {formatDistanceToNow(new Date(tx.created_at), { addSuffix: true })}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <div className={`p-1.5 rounded-md ${isCredit ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>
-                            {isCredit ? <ArrowDownRight className="w-3 h-3" /> : <ArrowUpRight className="w-3 h-3" />}
+                          <div className="p-1.5 rounded-md bg-green-100 text-green-600">
+                            <ArrowDownRight className="w-3 h-3" />
                           </div>
-                          <span className="font-medium text-foreground">{sourceLabel(tx.source_type, tx.description)}</span>
+                          <span className="font-medium text-foreground text-sm">
+                            {creditLabel(tx.source_type, tx.description)}
+                          </span>
                         </div>
                       </td>
-                      <td className={`px-6 py-4 text-right font-mono font-bold ${isCredit ? "text-success" : "text-foreground"}`}>
-                        {tx.amount > 0 ? "+" : ""}{tx.amount.toLocaleString()}
+                      <td className="px-6 py-4 text-right font-mono font-bold text-green-600">
+                        +{tx.amount.toLocaleString()}
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
       {/* ── Confirmation Dialog ── */}

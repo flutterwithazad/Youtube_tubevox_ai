@@ -1,0 +1,600 @@
+# YTScraper — Enhance Comment Explorer + Fix Credits Page
+# Paste this entire prompt into Replit Agent
+#
+# TWO AREAS TO ENHANCE:
+# 1. Comment Explorer: Add full SORT, FILTER, FIELDS, and EXPORT panels
+# 2. Credits page: Group transaction history by video/job, add "View Comments" button
+#
+# Do NOT rebuild from scratch. Enhance what exists.
+
+---
+
+## PART 1 — COMMENT EXPLORER ENHANCEMENTS
+
+The Comment Explorer currently has toolbar buttons (Sort, Filter, Fields, Export)
+that are either placeholder or basic. Replace them with fully working panels
+exactly like described below.
+
+All filtering is CLIENT-SIDE — filter the already-loaded `comments` array in state.
+No new Supabase queries needed for filtering.
+
+---
+
+### 1A — SORT PANEL
+
+Clicking "↕ Top likes" opens a small dropdown panel below the button.
+
+```
+┌─────────────────────┐
+│ ↕ Top comments      │  ← currently selected (checkmark)
+│   Newest first      │
+│   Oldest first      │
+└─────────────────────┘
+```
+
+Three sort options:
+- **Top comments** (default): sort by `likes` descending
+- **Newest first**: sort by `published_at` descending
+- **Oldest first**: sort by `published_at` ascending
+
+Implementation:
+```typescript
+const [sortBy, setSortBy] = useState<'top' | 'newest' | 'oldest'>('top')
+
+const sortedComments = useMemo(() => {
+  const arr = [...filteredComments]
+  if (sortBy === 'top')    return arr.sort((a,b) => (b.likes ?? 0) - (a.likes ?? 0))
+  if (sortBy === 'newest') return arr.sort((a,b) => new Date(b.published_at ?? 0).getTime() - new Date(a.published_at ?? 0).getTime())
+  if (sortBy === 'oldest') return arr.sort((a,b) => new Date(a.published_at ?? 0).getTime() - new Date(b.published_at ?? 0).getTime())
+  return arr
+}, [filteredComments, sortBy])
+```
+
+The button label updates to show current sort:
+- "↕ Top likes" when sort=top
+- "↕ Newest" when sort=newest
+- "↕ Oldest" when sort=oldest
+
+---
+
+### 1B — FILTER PANEL (two tabs: Simple + Advanced)
+
+Clicking "⚙ Filter" opens a panel to the right of the toolbar (same position
+as competitor screenshot). Panel has two tabs: **Simple** and **Advanced**.
+
+When ANY filter is active, the Filter button shows a red dot indicator.
+
+#### SIMPLE TAB
+
+```
+┌─────────────────────────────────────────────────────┐
+│ ⚙ FILTER                          [Simple] [Advanced] │
+│                                                     │
+│ ☑ Include replies                                   │
+│                                                     │
+│ Comment author                                      │
+│ [Search by author...                              ] │
+│                                                     │
+│ Comments with                                       │
+│ [Questions] [Mentions] [Hashtags] [Emojis]          │
+│                                                     │
+│ Minimum number of likes                             │
+│ [●────────────────────────] 0         max: {maxLikes}│
+│                                                     │
+│ [Clear all filters]                                 │
+└─────────────────────────────────────────────────────┘
+```
+
+**Simple filter state:**
+```typescript
+const [simpleFilters, setSimpleFilters] = useState({
+  includeReplies: true,      // default: show replies
+  authorSearch:   '',        // filter by author name
+  commentWith:    [] as string[], // 'questions' | 'mentions' | 'hashtags' | 'emojis'
+  minLikes:       0,
+})
+```
+
+**"Include replies" toggle:**
+When unchecked: hide rows where `is_reply === true`
+
+**Author search:**
+Filter where `comment.author` ILIKE the search term (case-insensitive)
+
+**Comments with pills (toggle on/off):**
+- Questions: filter where `text.includes('?')`
+- Mentions: filter where `text.includes('@')`
+- Hashtags: filter where `text.includes('#')`
+- Emojis: filter where `/\p{Emoji}/u.test(text)`
+
+Pill style: gray bg default, red bg + white text when active
+
+**Min likes slider:**
+Range 0 to max likes in the dataset. Filter where `likes >= minLikes`.
+Show current value next to slider.
+
+#### ADVANCED TAB
+
+```
+┌─────────────────────────────────────────────────────┐
+│ ⚙ FILTER                          [Simple] [Advanced] │
+│                                                     │
+│ Match [all ▾] [any ▾] conditions                    │
+│                                                     │
+│ [Comment text ▾] [contains ▾] [value input] [🗑]   │
+│                                                     │
+│ [+ Add Rule]   [Clear All]                          │
+└─────────────────────────────────────────────────────┘
+```
+
+**Advanced filter state:**
+```typescript
+interface FilterRule {
+  id:        string
+  field:     'text' | 'author' | 'likes' | 'is_reply'
+  operator:  string
+  value:     string
+}
+const [advancedRules, setAdvancedRules]   = useState<FilterRule[]>([])
+const [matchMode,     setMatchMode]       = useState<'all' | 'any'>('all')
+```
+
+**Field dropdown options:**
+- Comment text
+- Author
+- Likes
+- Is reply
+
+**Operator dropdown options by field:**
+- text/author: `contains` | `does not contain` | `equals` | `not equals` | `starts with` | `ends with` | `matches regex`
+- likes: `greater than` | `less than` | `equals` | `between`
+- is_reply: `is true` | `is false`
+
+**Filter logic:**
+```typescript
+const applyAdvancedRules = (comment: Comment): boolean => {
+  if (advancedRules.length === 0) return true
+
+  const results = advancedRules.map(rule => {
+    const fieldVal = rule.field === 'text'     ? (comment.text ?? '').toLowerCase()
+                   : rule.field === 'author'   ? (comment.author ?? '').toLowerCase()
+                   : rule.field === 'likes'    ? String(comment.likes ?? 0)
+                   : rule.field === 'is_reply' ? String(comment.is_reply)
+                   : ''
+    const val = rule.value.toLowerCase()
+
+    switch (rule.operator) {
+      case 'contains':         return fieldVal.includes(val)
+      case 'does not contain': return !fieldVal.includes(val)
+      case 'equals':           return fieldVal === val
+      case 'not equals':       return fieldVal !== val
+      case 'starts with':      return fieldVal.startsWith(val)
+      case 'ends with':        return fieldVal.endsWith(val)
+      case 'matches regex':    try { return new RegExp(val).test(fieldVal) } catch { return false }
+      case 'greater than':     return Number(fieldVal) > Number(val)
+      case 'less than':        return Number(fieldVal) < Number(val)
+      case 'is true':          return comment.is_reply === true
+      case 'is false':         return comment.is_reply === false
+      default:                 return true
+    }
+  })
+
+  return matchMode === 'all' ? results.every(Boolean) : results.some(Boolean)
+}
+```
+
+**"+ Add Rule" button:** appends a new rule with defaults (field=text, operator=contains, value='')
+
+**Clear All:** resets advancedRules to []
+
+---
+
+### 1C — FIELDS PANEL
+
+Clicking "📋 Fields" opens a panel showing column visibility toggles.
+
+```
+┌───────────────┐
+│ ☑ Published   │
+│ ☑ Author      │
+│ ☑ Comment     │
+│ ☑ Likes       │
+│ ☐ Reply       │  ← unchecked by default
+│ ☐ Heart       │  ← unchecked (not in our DB)
+│ ☐ Pinned      │  ← unchecked (not in our DB)
+└───────────────┘
+```
+
+Fields that are in our database and can be toggled:
+- Published (published_at) — default ON
+- Author — default ON
+- Comment (text) — default ON, always ON (cannot disable)
+- Likes — default ON
+- Reply (shows is_reply + reply_count) — default ON
+- Language — default OFF
+- Author Channel — default OFF
+
+```typescript
+const [visibleFields, setVisibleFields] = useState({
+  published:      true,
+  author:         true,
+  comment:        true,  // always true, disabled toggle
+  likes:          true,
+  replies:        true,
+  language:       false,
+  authorChannel:  false,
+})
+```
+
+The table columns show/hide based on these toggles.
+Grayed-out, non-interactive items: Heart, Pinned, Paid (these are competitor
+features we don't have — show them grayed out with a small lock icon)
+
+---
+
+### 1D — EXPORT PANEL (two sections)
+
+Clicking "↓ Export" opens a dropdown panel with TWO sections:
+
+```
+┌──────────────────────────────────────────────┐
+│  EXPORT WHAT YOU SEE IN THE TABLE (FILTERED) │
+│                                              │
+│  ↓ Spreadsheet (CSV)                         │
+│  ↓ Excel (XLSX)                              │
+│  ↓ Raw data (JSON)                           │
+│                                              │
+│  EXPORT FULL DATA (ALL COMMENTS)             │
+│                                              │
+│  ↓ Spreadsheet (CSV)                         │
+│  ↓ Excel (XLSX)                              │
+│  ↓ Raw data (JSON)                           │
+└──────────────────────────────────────────────┘
+```
+
+**Section 1 — "Export what you see (filtered)":**
+Exports only the currently filtered + sorted `displayedComments` array.
+(The comments already loaded and filtered in the UI)
+
+**Section 2 — "Export full data (all comments)":**
+Fetches ALL comments from Supabase for this job (all pages),
+then exports without any filters applied.
+
+```typescript
+// Export filtered (what's on screen):
+const exportFiltered = async (format: 'csv' | 'xlsx' | 'json') => {
+  const toExport = sortedComments  // already filtered + sorted
+  const filename = videoTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+  if (format === 'csv')  downloadCSV(toExport, filename)
+  if (format === 'xlsx') downloadExcel(toExport, filename)
+  if (format === 'json') downloadJSON(toExport, filename, videoTitle)
+  toast.success(`✓ Exported ${toExport.length.toLocaleString()} comments as ${format.toUpperCase()}`)
+}
+
+// Export all (fetch from DB first):
+const exportAll = async (format: 'csv' | 'xlsx' | 'json') => {
+  const id = toast.loading(`Fetching all ${totalCount.toLocaleString()} comments...`)
+  const allComments = await fetchAllCommentsForExport(jobId)
+  toast.dismiss(id)
+  const filename = videoTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+  if (format === 'csv')  downloadCSV(allComments, filename)
+  if (format === 'xlsx') downloadExcel(allComments, filename)
+  if (format === 'json') downloadJSON(allComments, filename, videoTitle)
+  toast.success(`✓ Exported ${allComments.length.toLocaleString()} comments`)
+}
+```
+
+Style the section headers in gray uppercase. Each export option has a download icon.
+
+---
+
+### 1E — FILTERED COMMENTS PIPELINE
+
+Wire all filters together in this exact order:
+
+```typescript
+const displayedComments = useMemo(() => {
+  let result = [...allLoadedComments]
+
+  // 1. Search (from search bar)
+  if (searchQuery) {
+    result = result.filter(c =>
+      c.text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.author?.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+  }
+
+  // 2. Simple filters
+  if (!simpleFilters.includeReplies) {
+    result = result.filter(c => !c.is_reply)
+  }
+  if (simpleFilters.authorSearch) {
+    result = result.filter(c =>
+      c.author?.toLowerCase().includes(simpleFilters.authorSearch.toLowerCase())
+    )
+  }
+  if (simpleFilters.commentWith.includes('questions')) {
+    result = result.filter(c => c.text?.includes('?'))
+  }
+  if (simpleFilters.commentWith.includes('mentions')) {
+    result = result.filter(c => c.text?.includes('@'))
+  }
+  if (simpleFilters.commentWith.includes('hashtags')) {
+    result = result.filter(c => c.text?.includes('#'))
+  }
+  if (simpleFilters.commentWith.includes('emojis')) {
+    result = result.filter(c => /\p{Emoji}/u.test(c.text ?? ''))
+  }
+  if (simpleFilters.minLikes > 0) {
+    result = result.filter(c => (c.likes ?? 0) >= simpleFilters.minLikes)
+  }
+
+  // 3. Advanced rules
+  if (advancedRules.length > 0) {
+    result = result.filter(applyAdvancedRules)
+  }
+
+  // 4. Sort
+  if (sortBy === 'top')    result.sort((a,b) => (b.likes ?? 0) - (a.likes ?? 0))
+  if (sortBy === 'newest') result.sort((a,b) => new Date(b.published_at ?? 0).getTime() - new Date(a.published_at ?? 0).getTime())
+  if (sortBy === 'oldest') result.sort((a,b) => new Date(a.published_at ?? 0).getTime() - new Date(b.published_at ?? 0).getTime())
+
+  return result
+}, [allLoadedComments, searchQuery, simpleFilters, advancedRules, matchMode, sortBy])
+```
+
+Show in the table footer:
+```
+Showing {displayedComments.length.toLocaleString()} of {totalCount.toLocaleString()} comments
+{activeFilterCount > 0 && `(${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''} active)`}
+```
+
+---
+
+## PART 2 — CREDITS PAGE: GROUP TRANSACTIONS BY VIDEO/JOB
+
+### Current state (broken):
+Transaction History shows individual batch rows:
+- "Batch: 3339 comments fetched — 1 credit per comment  -308"
+- "Batch: 3031 comments fetched — 1 credit per comment  -243"
+- "Batch: 2788 comments fetched — 1 credit per comment  -146"
+(All from the same job, but shown as separate rows)
+
+### Target state:
+Group all ledger rows by `source_id` (job ID) and show ONE row per job:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Dhruv Rathee पर क्या बोले Kejriwal?              4 min ago       │
+│  3,339 comments scraped                        -3,031 credits      │
+│                                 [View Comments →]                   │
+├────────────────────────────────────────────────────────────────────┤
+│  Mystery of Titanic | How the World...          2 hours ago        │
+│  8,865 comments scraped                        -8,865 credits      │
+│                                 [View Comments →]                   │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation:
+
+```typescript
+// Fetch credit_ledger rows and group by source_id (job ID)
+const fetchGroupedTransactions = async () => {
+  const supabase = createClient()
+
+  // Get all ledger rows
+  const { data: ledger } = await supabase
+    .from('credit_ledger')
+    .select('*')
+    .lt('amount', 0)  // only debits (spending rows)
+    .order('created_at', { ascending: false })
+
+  // Get all jobs for this user (to get titles)
+  const { data: jobs } = await supabase
+    .from('jobs')
+    .select('id, video_title, channel_name, thumbnail, downloaded_comments, status, created_at')
+    .order('created_at', { ascending: false })
+
+  // Group ledger rows by source_id (job_id)
+  const grouped = new Map<string, {
+    jobId:       string
+    totalSpent:  number
+    batchCount:  number
+    latestDate:  string
+    job:         typeof jobs[0] | undefined
+  }>()
+
+  for (const row of ledger ?? []) {
+    if (!row.source_id) continue
+    const existing = grouped.get(row.source_id)
+    if (existing) {
+      existing.totalSpent += Math.abs(row.amount)
+      existing.batchCount += 1
+    } else {
+      grouped.set(row.source_id, {
+        jobId:      row.source_id,
+        totalSpent: Math.abs(row.amount),
+        batchCount: 1,
+        latestDate: row.created_at,
+        job:        jobs?.find(j => j.id === row.source_id),
+      })
+    }
+  }
+
+  // Also include positive rows (admin grants, signup bonus, purchases)
+  const { data: credits } = await supabase
+    .from('credit_ledger')
+    .select('*')
+    .gt('amount', 0)
+    .order('created_at', { ascending: false })
+
+  return {
+    jobTransactions: Array.from(grouped.values()).sort(
+      (a,b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime()
+    ),
+    creditTransactions: credits ?? [],
+  }
+}
+```
+
+### Render each job transaction as a card:
+
+```tsx
+{jobTransactions.map(tx => (
+  <div key={tx.jobId} className="flex items-center justify-between py-4 px-4 border-b border-gray-100 hover:bg-gray-50 transition-colors">
+
+    {/* Left: thumbnail + info */}
+    <div className="flex items-center gap-3 flex-1 min-w-0">
+      {/* Thumbnail */}
+      {tx.job?.thumbnail ? (
+        <img
+          src={tx.job.thumbnail}
+          alt=""
+          className="w-14 h-10 object-cover rounded-md flex-shrink-0 bg-gray-100"
+        />
+      ) : (
+        <div className="w-14 h-10 bg-gray-100 rounded-md flex-shrink-0 flex items-center justify-center">
+          <svg className="w-5 h-5 text-gray-300" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M21.582 6.186a2.506 2.506 0 00-1.768-1.768C18.254 4 12 4 12 4s-6.254 0-7.814.418..."/>
+          </svg>
+        </div>
+      )}
+
+      {/* Title + meta */}
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-gray-900 truncate">
+          {tx.job?.video_title ?? 'Unknown video'}
+        </p>
+        <p className="text-xs text-gray-500 mt-0.5">
+          {tx.job?.downloaded_comments?.toLocaleString() ?? '?'} comments ·{' '}
+          {formatDistanceToNow(new Date(tx.latestDate), { addSuffix: true })}
+        </p>
+      </div>
+    </div>
+
+    {/* Right: credits spent + button */}
+    <div className="flex items-center gap-4 flex-shrink-0 ml-4">
+      <span className="text-sm font-mono font-semibold text-red-600">
+        -{tx.totalSpent.toLocaleString()}
+      </span>
+      <a
+        href={`/dashboard/jobs/${tx.jobId}`}
+        className="text-xs font-semibold text-red-600 border border-red-200 rounded-lg px-3 py-1.5 hover:bg-red-50 transition-colors whitespace-nowrap"
+      >
+        View Comments →
+      </a>
+    </div>
+
+  </div>
+))}
+```
+
+### Two sections in the transaction history:
+
+**Section 1: "Credits spent" (grouped by job)**
+Shows job cards as above.
+
+**Section 2: "Credits received"**
+Shows positive ledger rows (signup bonus, admin grants, purchases):
+```
+Date | Description | +Amount (green)
+e.g. "3 days ago | Welcome bonus | +500"
+e.g. "1 hour ago | Admin grant | +10,000"
+```
+
+### Pagination for the credits spent section:
+Show 10 jobs per page. Simple prev/next buttons at bottom.
+
+```typescript
+const JOBS_PER_PAGE = 10
+const [currentPage, setCurrentPage] = useState(0)
+const paginatedJobs = jobTransactions.slice(
+  currentPage * JOBS_PER_PAGE,
+  (currentPage + 1) * JOBS_PER_PAGE
+)
+const totalPages = Math.ceil(jobTransactions.length / JOBS_PER_PAGE)
+```
+
+Render pagination:
+```tsx
+{totalPages > 1 && (
+  <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
+    <span className="text-sm text-gray-500">
+      Showing {currentPage * JOBS_PER_PAGE + 1}–
+      {Math.min((currentPage + 1) * JOBS_PER_PAGE, jobTransactions.length)} of{' '}
+      {jobTransactions.length} jobs
+    </span>
+    <div className="flex gap-2">
+      <button
+        onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
+        disabled={currentPage === 0}
+        className="px-3 py-1.5 text-sm border rounded-lg disabled:opacity-40 hover:bg-gray-50 transition-colors"
+      >
+        ← Previous
+      </button>
+      <button
+        onClick={() => setCurrentPage(p => Math.min(totalPages - 1, p + 1))}
+        disabled={currentPage === totalPages - 1}
+        className="px-3 py-1.5 text-sm border rounded-lg disabled:opacity-40 hover:bg-gray-50 transition-colors"
+      >
+        Next →
+      </button>
+    </div>
+  </div>
+)}
+```
+
+---
+
+## PART 3 — ACTIVE FILTER COUNT BADGE ON FILTER BUTTON
+
+The Filter button shows how many filters are currently active:
+
+```typescript
+const activeFilterCount = useMemo(() => {
+  let count = 0
+  if (!simpleFilters.includeReplies) count++
+  if (simpleFilters.authorSearch)    count++
+  if (simpleFilters.commentWith.length > 0) count += simpleFilters.commentWith.length
+  if (simpleFilters.minLikes > 0)    count++
+  count += advancedRules.length
+  return count
+}, [simpleFilters, advancedRules])
+
+// Button render:
+<button>
+  ⚙ Filter
+  {activeFilterCount > 0 && (
+    <span className="ml-1.5 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+      {activeFilterCount}
+    </span>
+  )}
+</button>
+```
+
+---
+
+## SUMMARY OF ALL CHANGES
+
+### Comment Explorer:
+1. SORT dropdown — 3 options: Top likes / Newest / Oldest (fully wired)
+2. FILTER panel — Simple tab: include replies, author search, comment-with pills, min-likes slider
+3. FILTER panel — Advanced tab: add rules with field/operator/value, match all/any
+4. FIELDS panel — toggle column visibility (Published, Author, Likes, Replies, Language, Author Channel)
+5. EXPORT panel — two sections: filtered export and full data export
+6. Filter count badge on Filter button
+7. Footer shows "X of Y comments (N filters active)"
+
+### Credits page:
+1. Group transaction history by job (not by batch)
+2. Each job shows: thumbnail + video title + comment count + date + credits spent + "View Comments →" button
+3. "View Comments →" links to /dashboard/jobs/[jobId]
+4. Separate "Credits received" section for positive ledger entries
+5. Pagination: 10 jobs per page with prev/next buttons
+
+### Do NOT touch:
+- Sidebar navigation
+- Top bar credits pill
+- Scrape form (URL input, chips, etc.)
+- Job progress card
+- Any other page
