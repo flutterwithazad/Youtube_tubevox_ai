@@ -1,0 +1,477 @@
+# YTScraper — Fix: Job cancels mid-scrape despite having enough credits
+# Paste into Replit Agent
+#
+# SYMPTOMS:
+# - User has 14,880 credits
+# - Job stops at ~1,500 comments
+# - Status shows 'cancelled' (not 'failed')
+# - Message says "Job was cancelled"
+# - This is NOT a credit issue — credits are available
+#
+# ROOT CAUSE: Something is explicitly setting status='cancelled'
+# This prompt finds it, diagnoses it, and fixes it.
+
+---
+
+## DIAGNOSTIC STEP 1 — Find what is cancelling the job
+
+Run this in Supabase SQL Editor to see the exact sequence of events
+for the most recent cancelled job:
+
+```sql
+-- See the last 5 cancelled jobs and their credit ledger trail
+SELECT
+  j.id,
+  j.status,
+  j.downloaded_comments,
+  j.credits_reserved,
+  j.error_message,
+  j.started_at,
+  j.completed_at,
+  ROUND(EXTRACT(EPOCH FROM (j.completed_at - j.started_at))) AS duration_seconds,
+  j.created_at
+FROM public.jobs j
+WHERE j.status = 'cancelled'
+ORDER BY j.created_at DESC
+LIMIT 5;
+```
+
+Check the `duration_seconds` column:
+- If duration is 140-160 seconds → **Edge Function timeout** (Fix 1)
+- If duration is very short (< 30s) → **Frontend cancellation bug** (Fix 2)
+- If duration varies → **onBatch wrong job ID check** (Fix 3)
+
+---
+
+## DIAGNOSTIC STEP 2 — Check the cancellation check in the edge function
+
+Open: `supabase/functions/fetch-comments/index.ts`
+
+Find the `onBatch` function. Inside it there should be a cancellation check
+that looks like this:
+
+```typescript
+const { data: jobCheck } = await supabase
+  .from('jobs')
+  .select('status')
+  .eq('id', job.id)  // ← THIS MUST BE job.id, not user_id or anything else
+  .single()
+
+if (jobCheck?.status === 'cancelled') {
+  isCancelled = true
+  return false
+}
+```
+
+**BUG TO LOOK FOR:** If the query uses `.eq('user_id', user.id)` instead of
+`.eq('id', job.id)` — it reads ANY job for that user, including old cancelled
+ones. This makes every new scrape think it was cancelled.
+
+Also check: is there any code that sets `status = 'cancelled'` inside the
+edge function when credits run low? That should set 'failed' or just stop —
+not 'cancelled'. 'cancelled' should only mean user explicitly clicked cancel.
+
+---
+
+## DIAGNOSTIC STEP 3 — Check for Supabase timeout
+
+Add this log at the very start of the edge function serve() handler:
+
+```typescript
+const startTime = Date.now()
+console.log('[TIMING] Edge function invocation started:', new Date().toISOString())
+```
+
+And at the end (before the final return):
+
+```typescript
+console.log('[TIMING] Edge function completed in:', Date.now() - startTime, 'ms')
+```
+
+And in onBatch:
+```typescript
+console.log(`[TIMING] onBatch called at ${Date.now() - startTime}ms, batch=${batch.length}`)
+```
+
+Deploy and run a scrape. Check Supabase → Edge Functions → fetch-comments → Logs.
+If you see the logs cut off abruptly around 145,000ms (145 seconds) → timeout.
+
+---
+
+## NOW APPLY ALL FIXES
+
+---
+
+## FIX 1 — Edge Function timeout (Supabase free tier: 150s hard limit)
+
+The free tier Supabase edge function has a 150-second timeout.
+With 500 comments/invocation and reply fetching, this can be hit easily.
+
+**Solution: Reduce PER_INVOCATION_LIMIT from 500 to 200.**
+
+In `supabase/functions/fetch-comments/index.ts`:
+
+```typescript
+// Find this line:
+const PER_INVOCATION_LIMIT = 500;  // or 2000
+
+// Change to:
+const PER_INVOCATION_LIMIT = 200;
+// 200 comments per invocation = ~30-60 seconds safely within 150s limit
+// The frontend chains more calls automatically — no data loss
+```
+
+Also add a safety timeout inside the edge function itself so it exits
+cleanly before Deno kills it hard:
+
+```typescript
+// At the top of the serve() handler, after parsing the body:
+const SAFE_TIMEOUT_MS = 120_000  // 120 seconds — exit cleanly before 150s hard kill
+
+const timeoutPromise = new Promise<never>((_, reject) =>
+  setTimeout(() => reject(new Error('SAFE_TIMEOUT')), SAFE_TIMEOUT_MS)
+)
+
+// Wrap the entire scraping operation in a race:
+let scrapeResult: { totalFetched: number; nextPageToken: string | null }
+try {
+  scrapeResult = await Promise.race([
+    yt.fetchAllComments(
+      job.id,
+      videoId,
+      { ...filters, maxComments: commentTarget },
+      commentTarget,
+      onBatch,
+      startPageToken,
+      PER_INVOCATION_LIMIT,
+    ),
+    timeoutPromise,
+  ])
+  nextPageToken = scrapeResult.nextPageToken
+} catch (timeoutErr: any) {
+  if (timeoutErr.message === 'SAFE_TIMEOUT') {
+    console.log('[TIMEOUT] Safe timeout reached — saving progress and returning resume token')
+    // Get current page token from wherever the YouTubeApi left off
+    // Return done=false so frontend chains another call
+    const { data: currentJob } = await supabaseAdmin
+      .from('jobs')
+      .select('next_page_token, downloaded_comments')
+      .eq('id', job.id)
+      .single()
+
+    // Mark job as still running (not cancelled, not failed)
+    await supabaseAdmin.from('jobs').update({
+      status: 'running',
+      downloaded_comments: alreadyFetched + totalInserted,
+    }).eq('id', job.id)
+
+    return json({
+      success:       true,
+      done:          false,
+      nextPageToken: currentJob?.next_page_token ?? null,
+      job_id:        job.id,
+      video_title:   video.title,
+      channel_name:  video.channelName,
+      thumbnail:     video.thumbnail,
+      comment_count: alreadyFetched + totalInserted,
+      credits_used:  creditsUsed,
+      balance_after: balance - creditsUsed,
+      cancelled:     false,
+      timeout:       true,  // flag so frontend knows this was a timeout
+    })
+  }
+  throw timeoutErr  // re-throw non-timeout errors
+}
+```
+
+---
+
+## FIX 2 — onBatch cancellation check using wrong filter
+
+In `supabase/functions/fetch-comments/index.ts`, find the onBatch function.
+Fix the cancellation check to ALWAYS use job.id:
+
+```typescript
+const onBatch = async (batch: any[], _totalSoFar: number): Promise<boolean> => {
+
+  // CANCELLATION CHECK — must use job.id specifically
+  const { data: jobCheck } = await supabaseAdmin
+    .from('jobs')
+    .select('status')
+    .eq('id', job.id)        // ← MUST be job.id, never user_id
+    .single()
+
+  console.log(`[CANCEL CHECK] job.id=${job.id} status=${jobCheck?.status}`)
+
+  if (jobCheck?.status === 'cancelled') {
+    console.log('[CANCEL] Job was explicitly cancelled by user — stopping')
+    isCancelled = true
+    return false
+  }
+
+  // Do NOT stop for any other status here
+  // 'failed', 'running', 'queued' — all should continue
+  // Only 'cancelled' stops the loop
+
+  // ... rest of onBatch
+}
+```
+
+---
+
+## FIX 3 — Frontend polling reading wrong job
+
+In the scrape page component, find the polling useEffect.
+Make sure it filters by the SPECIFIC active job ID, not just any job:
+
+```typescript
+// WRONG — might read a different job:
+const { data } = await supabase
+  .from('jobs')
+  .select('*')
+  .eq('user_id', userId)
+  .in('status', ['queued', 'running'])
+  .single()
+
+// CORRECT — always poll the specific job we started:
+const { data } = await supabase
+  .from('jobs')
+  .select('*')
+  .eq('id', activeJobId)   // ← specific job ID, never user_id filter
+  .single()
+```
+
+Also fix the completion check — only stop polling when THIS job is done:
+
+```typescript
+useEffect(() => {
+  if (!activeJobId) return
+
+  const poll = setInterval(async () => {
+    const { data: job } = await supabase
+      .from('jobs')
+      .select('*')
+      .eq('id', activeJobId)  // specific job
+      .single()
+
+    if (!job) return
+    setActiveJob(job)
+
+    console.log(`[POLL] job=${activeJobId} status=${job.status} downloaded=${job.downloaded_comments}`)
+
+    if (job.status === 'completed') {
+      clearInterval(poll)
+      await refetch()
+      setScrapeState('completed')
+      toast.success(`✓ ${job.downloaded_comments?.toLocaleString()} comments scraped!`)
+    }
+
+    if (job.status === 'cancelled') {
+      clearInterval(poll)
+      await refetch()
+      // Show partial results if we have data, not an error
+      if ((job.downloaded_comments ?? 0) >= 100) {
+        setScrapeState('completed')
+        toast.warning(`Scrape stopped at ${job.downloaded_comments?.toLocaleString()} comments.`)
+      } else {
+        setScrapeState('failed')
+      }
+    }
+
+    if (job.status === 'failed') {
+      clearInterval(poll)
+      await refetch()
+      setScrapeState('failed')
+      toast.error(job.error_message ?? 'Scrape failed')
+    }
+
+    // IMPORTANT: Do NOT stop polling for status='running'
+    // Keep polling until a terminal status is reached
+
+  }, 2000)
+
+  return () => clearInterval(poll)
+}, [activeJobId])
+```
+
+---
+
+## FIX 4 — Prevent frontend from cancelling job on unmount/re-render
+
+If the scrape page component has any cleanup code that cancels the job
+when the component unmounts — REMOVE it.
+
+Search for any code like this in the scrape page:
+
+```typescript
+// DELETE any useEffect cleanup that cancels jobs:
+useEffect(() => {
+  return () => {
+    // DON'T DO THIS:
+    if (activeJobId) {
+      supabase.from('jobs').update({ status: 'cancelled' }).eq('id', activeJobId)
+    }
+  }
+}, [activeJobId])
+```
+
+The only time `status='cancelled'` should be set is when the user
+explicitly clicks the "Cancel Job" button.
+
+Also check: does navigating away from /dashboard/scrape cancel the job?
+If yes — remove that behavior. The edge function runs independently of
+the frontend. The user should be able to close the tab and come back.
+
+---
+
+## FIX 5 — Save next_page_token to DB during scraping for resumability
+
+The edge function should save `next_page_token` after every page so that
+if it gets cancelled or times out, the frontend can resume from where it left off.
+
+In the edge function's onBatch, after updating downloaded_comments:
+
+```typescript
+// Save the current page token so we can resume if interrupted
+// This should already exist — verify it does and add if missing
+await supabaseAdmin.from('jobs').update({
+  downloaded_comments: alreadyFetched + totalInserted,
+  next_page_token:     currentPageToken,  // save current position
+  status:              'running',
+}).eq('id', job.id)
+```
+
+---
+
+## FIX 6 — Don't set status='cancelled' when credits run out
+
+When `atomic_credit_deduct` returns `{ok: false}`, the job should
+stop naturally — but the status should be set to 'completed' (partial)
+not 'cancelled'. 'cancelled' means user action.
+
+In the edge function, in the finalisation section:
+
+```typescript
+// CURRENT (likely wrong):
+if (!isCancelled) {
+  if (done) {
+    await supabaseAdmin.from('jobs').update({ status: 'completed', ... })
+  }
+} else {
+  // This sets cancelled status even for credit exhaustion!
+  await supabaseAdmin.from('jobs').update({ status: 'cancelled', ... })
+}
+
+// FIX — track WHY it stopped:
+let stopReason: 'completed' | 'cancelled' | 'credits_exhausted' = 'completed'
+
+// In onBatch, when credits run out:
+if (!deductResult?.ok) {
+  stopReason = 'credits_exhausted'
+  return false
+}
+
+// In the cancellation check:
+if (jobCheck?.status === 'cancelled') {
+  isCancelled = true
+  stopReason = 'cancelled'
+  return false
+}
+
+// In finalisation:
+if (stopReason === 'completed') {
+  await supabaseAdmin.from('jobs').update({
+    status: 'completed',
+    progress: 100,
+    credits_used: creditsUsed,
+    downloaded_comments: totalAcrossAllInvocations,
+    completed_at: new Date().toISOString(),
+  }).eq('id', job.id)
+}
+else if (stopReason === 'credits_exhausted') {
+  // Partial completion — has data but ran out of credits
+  await supabaseAdmin.from('jobs').update({
+    status: 'completed',          // mark as completed so explorer shows
+    progress: 100,
+    credits_used: creditsUsed,
+    downloaded_comments: totalAcrossAllInvocations,
+    completed_at: new Date().toISOString(),
+    error_message: 'Stopped: credits exhausted. Showing partial results.',
+  }).eq('id', job.id)
+}
+else if (stopReason === 'cancelled') {
+  // User explicitly cancelled
+  await supabaseAdmin.from('jobs').update({
+    status: 'cancelled',
+    downloaded_comments: totalAcrossAllInvocations,
+    completed_at: new Date().toISOString(),
+  }).eq('id', job.id)
+}
+```
+
+---
+
+## FIX 7 — Add job_id to all edge function logs for traceability
+
+Every console.log in the edge function should include the job ID
+so you can trace exactly what happened to a specific job in the logs:
+
+```typescript
+// Replace generic logs like:
+console.log('Starting scrape...')
+
+// With job-tagged logs:
+console.log(`[JOB:${job?.id?.slice(0,8)}] Starting scrape videoId=${videoId}`)
+console.log(`[JOB:${job?.id?.slice(0,8)}] onBatch: ${batch.length} comments, status=${jobCheck?.status}`)
+console.log(`[JOB:${job?.id?.slice(0,8)}] Credits deducted: ${batch.length}, ok=${deductResult?.ok}`)
+console.log(`[JOB:${job?.id?.slice(0,8)}] Finalising: stopReason=${stopReason} total=${totalAcrossAllInvocations}`)
+```
+
+Deploy: `supabase functions deploy fetch-comments`
+
+Then immediately run a scrape and go to:
+Supabase Dashboard → Edge Functions → fetch-comments → Logs
+
+Filter by your job ID (first 8 chars) to see the exact execution trace.
+
+---
+
+## DEPLOY & TEST
+
+After all fixes:
+
+```bash
+supabase functions deploy fetch-comments
+```
+
+### Test sequence:
+
+1. Start scrape on a video with 5,000+ comments
+2. Open Supabase → Edge Functions → fetch-comments → Logs (keep open)
+3. Watch the logs in real time
+4. If it stops: check logs for the exact last line before stopping
+   - Ends with `[CANCEL CHECK]` → Fix 2 (wrong job ID in cancel check)
+   - Ends at ~145,000ms → Fix 1 (timeout — reduce PER_INVOCATION_LIMIT to 200)
+   - No logs at all after start → Fix 4 (frontend cancelling on re-render)
+   - Shows `stopReason=credits_exhausted` but has 14K credits → Fix 3 (wrong balance read)
+
+### Quick DB check after any stopped job:
+
+```sql
+-- See what happened to the last job
+SELECT
+  id,
+  status,
+  error_message,
+  downloaded_comments,
+  credits_used,
+  ROUND(EXTRACT(EPOCH FROM (completed_at - started_at))) AS ran_for_seconds,
+  created_at
+FROM public.jobs
+ORDER BY created_at DESC
+LIMIT 3;
+```
+
+If `ran_for_seconds` is around 140-150 → timeout is the cause.
+If `ran_for_seconds` is < 10 → frontend or cancel check bug.
+If `error_message` mentions credits but credits_used is 0 → balance read bug.

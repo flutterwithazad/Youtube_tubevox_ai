@@ -60,10 +60,24 @@ serve(async (req) => {
 
     // ── 2. Parse body ────────────────────────────────────────
     // Comments fetched per Edge Function invocation (measured at page boundaries).
-    // Supabase free plan has ~150s timeout. With parallel reply fetching each page
-    // takes ~5-10s, so 500 comments ≈ 1-5 pages ≈ well within the timeout.
-    // The backend chains multiple calls via pageToken to fetch everything.
-    const PER_INVOCATION_LIMIT = 500;
+    // Supabase free tier has a hard 150-second wall-clock limit. Each YouTube
+    // page takes ~2-8s depending on reply depth. 200 comments ≈ 2-5 pages ≈
+    // 10-40s — a safe buffer below the 120s soft-exit below.
+    // The frontend chains multiple calls automatically via nextPageToken.
+    const PER_INVOCATION_LIMIT = 200;
+
+    // ── Safe timeout — exit cleanly 30s before Deno's hard kill ────────────
+    // If we let Deno hard-kill at 150s the job stays stuck as 'running' in DB
+    // forever. This promise rejects after 120s so we can return a clean resume
+    // token instead of leaving an orphan job.
+    const SAFE_TIMEOUT_MS = 120_000;
+    let safeTimeoutId: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      safeTimeoutId = setTimeout(
+        () => reject(new Error("SAFE_TIMEOUT")),
+        SAFE_TIMEOUT_MS,
+      );
+    });
 
     const body = await req.json();
     const {
@@ -266,17 +280,49 @@ serve(async (req) => {
     // The backend chains invocations using the returned nextPageToken.
     let nextPageToken: string | null = null;
     try {
-      const result = await yt.fetchAllComments(
-        job.id,
-        videoId,
-        { ...filters, maxComments: commentTarget },
-        commentTarget,
-        onBatch,
-        startPageToken,    // resume from previous invocation (undefined on first call)
-        PER_INVOCATION_LIMIT,
-      );
-      nextPageToken = result.nextPageToken;
+      const scrapeResult = await Promise.race([
+        yt.fetchAllComments(
+          job.id,
+          videoId,
+          { ...filters, maxComments: commentTarget },
+          commentTarget,
+          onBatch,
+          startPageToken,    // resume from previous invocation (undefined on first call)
+          PER_INVOCATION_LIMIT,
+        ),
+        timeoutPromise,
+      ]);
+      clearTimeout(safeTimeoutId!);
+      nextPageToken = scrapeResult.nextPageToken;
     } catch (fetchErr: any) {
+      clearTimeout(safeTimeoutId!);
+
+      if (fetchErr.message === "SAFE_TIMEOUT") {
+        // We hit the 120s safety limit before Deno's hard 150s kill.
+        // Return done:false so the frontend chains another invocation.
+        console.log(`[JOB:${job.id.slice(0,8)}] Safe timeout reached — returning resume token`);
+        const totalSoFar = alreadyFetched + totalInserted;
+        await supabase.from("jobs").update({
+          status:              "running",
+          downloaded_comments: totalSoFar,
+        }).eq("id", job.id);
+
+        return json({
+          success:       true,
+          done:          false,
+          nextPageToken: startPageToken ?? null, // best approximation — frontend will re-call
+          job_id:        job.id,
+          video_title:   video.title,
+          channel_name:  video.channelName,
+          thumbnail:     video.thumbnail,
+          comment_count: totalSoFar,
+          credits_used:  creditsUsed,
+          balance_after: balance - creditsUsed,
+          cancelled:     false,
+          timeout:       true,
+        });
+      }
+
       const { data: statusCheck } = await supabase
         .from("jobs").select("status").eq("id", job.id).single();
       if (statusCheck?.status === "cancelled") {
@@ -303,12 +349,16 @@ serve(async (req) => {
     // fetchAllComments returned nextPageToken:null (same as "done") but the
     // scrape was NOT naturally complete — credits simply ran out.
     // Return 402 so the frontend shows "Partial Results" instead of "Completed".
+    // Status is 'completed' (not 'cancelled') — the user did not cancel this.
+    // Using 'cancelled' was a bug: if the page reloaded while a fresh job was
+    // mid-flight, checkActive would see the 'cancelled' status and show stale
+    // partial-result UI even before the job had any real data.
     if (creditExhausted && !isCancelled) {
       await supabase.from("jobs").update({
-        status:              "cancelled",
+        status:              "completed",
         downloaded_comments: totalAcrossAllInvocations,
         completed_at:        new Date().toISOString(),
-        error_message:       "Scrape stopped: insufficient credits",
+        error_message:       "Partial results — credits exhausted before all comments were fetched",
       }).eq("id", job.id);
 
       return json({

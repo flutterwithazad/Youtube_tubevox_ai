@@ -52,6 +52,9 @@ export default function Scrape() {
   const [isRunning, setIsRunning] = useState(false);
   const [isPartialResult, setIsPartialResult] = useState(false);
   const abortRef = useRef(false);
+  // Set to true when checkActive reconnects to an in-progress job rather than
+  // starting a fresh scrape. Polling uses this to know it owns the job watch.
+  const reconnectedRef = useRef(false);
 
   // On load: check for an existing active/stuck job
   useEffect(() => {
@@ -69,9 +72,28 @@ export default function Scrape() {
       if (!data) return;
 
       const comments = data.downloaded_comments ?? 0;
+      const startedAt = data.started_at ? new Date(data.started_at) : null;
+      const ageMs = startedAt ? Date.now() - startedAt.getTime() : Infinity;
+      // Jobs started within the last 10 minutes are considered fresh.
+      // The edge function runs server-side independently of the browser — cancelling
+      // the DB record (old behaviour) made onBatch() read 'cancelled' and abort the
+      // entire scrape even though credits were available. We now reconnect instead.
+      const STALE_MS = 10 * 60 * 1000; // 10 minutes
 
-      // Always cancel jobs found on page load — we can't resume a scrape stream
-      // across page loads. If it has ≥100 comments, show partial results.
+      if (ageMs < STALE_MS) {
+        // Recent job — reconnect the UI to it and let the polling effect watch it.
+        reconnectedRef.current = true;
+        setActiveJobId(data.id);
+        setActiveJob(data);
+        setLiveCommentCount(comments);
+        if (data.video_url) setVideoUrl(data.video_url);
+        setIsRunning(true);
+        setState("running");
+        toast.info("Reconnected to your running scrape.", { duration: 4000 });
+        return;
+      }
+
+      // Stale job (> 10 min old, probably abandoned) — cancel it so it doesn't block.
       await supabase
         .from("jobs")
         .update({
@@ -94,6 +116,87 @@ export default function Scrape() {
     };
     checkActive();
   }, [user]);
+
+  // ── Reconnect polling ────────────────────────────────────────────────────────
+  // When the page loads while a job is already running (e.g. after navigation
+  // within the SPA), we reconnect instead of cancelling. This effect polls the
+  // specific job every 3 seconds until it reaches a terminal state.
+  // It is intentionally separate from the runScrapeJob loop — both can coexist
+  // because the loop drives its own UI updates while this watches the DB status.
+  useEffect(() => {
+    if (!isRunning || !activeJobId || !reconnectedRef.current) return;
+
+    let pollCount = 0;
+    const MAX_STALE_POLLS = 60; // 3 min of no terminal status = give up gracefully
+
+    const interval = setInterval(async () => {
+      pollCount++;
+
+      const { data: job } = await supabase
+        .from("jobs")
+        .select("*")
+        .eq("id", activeJobId)
+        .single();
+
+      if (!job) return;
+
+      // Always advance the counter to the latest value
+      const count = job.downloaded_comments ?? 0;
+      setLiveCommentCount((prev) => Math.max(prev, count));
+      setActiveJob(job);
+
+      if (job.status === "completed") {
+        clearInterval(interval);
+        reconnectedRef.current = false;
+        setIsRunning(false);
+        setState("completed");
+        refetchBalance();
+        toast.success(`✓ ${count.toLocaleString()} comments scraped!`);
+      } else if (job.status === "cancelled") {
+        clearInterval(interval);
+        reconnectedRef.current = false;
+        setIsRunning(false);
+        refetchBalance();
+        if (count >= 100) {
+          setIsPartialResult(true);
+          setState("completed");
+          toast.warning(`Scrape stopped at ${count.toLocaleString()} comments. Showing available data.`);
+        } else {
+          setState("input");
+          setActiveJobId(null);
+          setActiveJob(null);
+          toast.info("Previous job ended.");
+        }
+      } else if (job.status === "failed") {
+        clearInterval(interval);
+        reconnectedRef.current = false;
+        setIsRunning(false);
+        setState("failed");
+        refetchBalance();
+        toast.error(job.error_message ?? "Scrape failed.");
+      } else if (pollCount >= MAX_STALE_POLLS) {
+        // Still 'running' after 3 minutes — likely an orphaned job with no more
+        // frontend driving it (edge fn finished but nobody called the next page).
+        // Show whatever data was collected rather than leaving the user stuck.
+        clearInterval(interval);
+        reconnectedRef.current = false;
+        setIsRunning(false);
+        refetchBalance();
+        if (count >= 100) {
+          setIsPartialResult(true);
+          setState("completed");
+          toast.warning(`Scrape stalled at ${count.toLocaleString()} comments. Showing collected data.`);
+        } else {
+          setState("input");
+          setActiveJobId(null);
+          setActiveJob(null);
+          toast.info("Previous scrape had no recoverable data.");
+        }
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [isRunning, activeJobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced URL handler
   const handleUrlChange = (value: string) => {
@@ -368,6 +471,7 @@ export default function Scrape() {
   const handleSubmit = async () => {
     if (!canSubmit) return;
     abortRef.current = false;
+    reconnectedRef.current = false; // this is a fresh scrape, not a reconnect
     setIsRunning(true);
     setLiveCommentCount(0);
     setLiveCreditsUsed(0);
