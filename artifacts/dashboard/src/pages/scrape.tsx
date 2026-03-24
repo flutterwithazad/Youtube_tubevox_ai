@@ -176,42 +176,18 @@ export default function Scrape() {
     if (data) setActiveJob(data);
   };
 
-  const deductCreditsForBatch = async (
-    accessToken: string,
-    jobId: string,
-    amount: number,
-    description: string,
-  ): Promise<{ ok: boolean; balance?: number; needed?: number }> => {
-    try {
-      const res = await fetch('/api/credits/deduct', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ amount, job_id: jobId, description }),
-      });
-      const data = await res.json();
-      if (res.status === 402) {
-        return { ok: false, balance: data.balance, needed: data.credits_needed };
-      }
-      if (!res.ok) throw new Error(data.error ?? 'Credit deduction failed');
-      return { ok: true, balance: data.balance };
-    } catch (e: any) {
-      console.error('[deductCredits]', e.message);
-      return { ok: false };
-    }
-  };
-
   const runScrapeJob = async () => {
     if (!user) return;
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { toast.error("Not authenticated"); return; }
+
+    // Get a fresh session — also used for the pre-flight balance check below.
+    // NOTE: getSession() auto-refreshes the token if it is close to expiry.
+    const { data: { session: initialSession } } = await supabase.auth.getSession();
+    if (!initialSession) { toast.error("Not authenticated"); return; }
 
     // Server-side minimum credit check — enforced even if UI check is bypassed
     try {
       const balRes = await fetch('/api/credits/balance', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${initialSession.access_token}` },
       });
       const balData = await balRes.json();
       const serverBalance = balData.balance ?? 0;
@@ -226,7 +202,7 @@ export default function Scrape() {
         return;
       }
     } catch {
-      // If balance check fails, let the scrape proceed — the deduction step will catch it
+      // If balance check fails, let the scrape proceed — the edge function will catch it
     }
 
     const finalMaxComments: number | null = (() => {
@@ -246,6 +222,18 @@ export default function Scrape() {
     while (invocationCount < MAX_INVOCATIONS) {
       if (abortRef.current) return;
       invocationCount++;
+
+      // ── Fresh session per invocation ───────────────────────────────────────
+      // getSession() auto-refreshes the JWT when it is within 60s of expiry.
+      // Capturing it once at the top would cause auth failures on long scrapes
+      // (default JWT lifetime is 1 hour; 100 invocations × 30s = up to 50 min).
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error("Your session expired. Please sign in again and retry.");
+        setState("failed");
+        setIsRunning(false);
+        return;
+      }
 
       const body: Record<string, unknown> = {
         videoUrl,
@@ -427,6 +415,9 @@ export default function Scrape() {
     setActiveJobId(null);
     setActiveJob(null);
     setIsPartialResult(false);
+    // Always fetch a live balance before showing the form again so the
+    // credit counter in the topbar and the chip shortfall warning are accurate.
+    refetchBalance();
   };
 
   // Try Again keeps URL + video preview so the user doesn't have to re-enter
@@ -438,6 +429,7 @@ export default function Scrape() {
     setLiveCommentCount(0);
     setLiveCreditsUsed(0);
     setIsPartialResult(false);
+    refetchBalance();
   };
 
   const progressPercent = activeJob?.requested_comments

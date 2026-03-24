@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 
 export function useCredits(userId: string | undefined) {
   const [balance, setBalance] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const fetchBalance = useCallback(async () => {
     if (!userId) return;
@@ -18,8 +19,22 @@ export function useCredits(userId: string | undefined) {
 
   useEffect(() => {
     fetchBalance();
-    const interval = setInterval(fetchBalance, 30000);
-    return () => clearInterval(interval);
+
+    // Poll every 10s so balance stays current during active scraping
+    intervalRef.current = setInterval(fetchBalance, 10_000);
+
+    // Refresh immediately when the user switches back to this tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        fetchBalance();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      clearInterval(intervalRef.current);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [fetchBalance]);
 
   return { balance, loading, refetch: fetchBalance };

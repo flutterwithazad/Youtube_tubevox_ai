@@ -1,0 +1,551 @@
+# YTScraper — Deep Diagnosis & Fix: Scrape stops mid-way on second run
+# Paste this entire prompt into Replit Agent
+#
+# ISSUE: First scrape works fine. Second scrape stops mid-way with
+# "not enough credits" even though the user should have credits.
+#
+# Do NOT guess. Run every diagnostic step in order, log findings,
+# then apply fixes based on what the diagnostics reveal.
+
+---
+
+## WHAT WE KNOW
+
+- First scrape: works fine
+- Second scrape: stops mid-way claiming insufficient credits
+- This is a "works once, breaks on repeat" pattern
+
+The most likely root cause is ONE or MORE of:
+1. Stale credit balance in React state (not refreshed after first scrape)
+2. Double credit deduction (frontend + edge function both deducting)
+3. job_reserve ledger rows never settled/refunded from first job
+4. JWT token expired between scrapes
+5. Balance variable in useCredits hook not re-fetching after job completion
+
+---
+
+## STEP 1 — DIAGNOSTIC: Check credit_ledger for double deductions
+
+Run this in Supabase SQL Editor to see all credit transactions for your test user:
+
+```sql
+SELECT
+  id,
+  amount,
+  source_type,
+  source_id,
+  description,
+  balance_after,
+  created_at
+FROM public.credit_ledger
+ORDER BY created_at DESC
+LIMIT 30;
+```
+
+Look for:
+- Multiple negative rows with source_type = 'job_reserve' for the same job
+- A job_reserve row that was NEVER followed by a job_settle or job_cancel_refund
+- The running balance going to 0 or negative after first scrape
+
+If you see TWO negative rows for the same job_id → double deduction bug (go to Fix A).
+If you see a job_reserve with no matching settle/refund → orphaned reservation (go to Fix B).
+
+---
+
+## STEP 2 — DIAGNOSTIC: Check what balance the frontend is reading
+
+Add a temporary console.log in the scrape page component to log the balance
+at three key moments:
+
+```typescript
+// Add these logs in the scrape page component:
+
+// 1. When component mounts / page loads
+useEffect(() => {
+  console.log('[BALANCE CHECK] On mount:', balance)
+}, [])
+
+// 2. Right before calling the edge function
+const handleSubmit = async () => {
+  console.log('[BALANCE CHECK] At submit time:', balance)
+  console.log('[BALANCE CHECK] maxComments:', maxComments)
+  console.log('[BALANCE CHECK] Expected cost:', maxComments ?? 'ALL')
+
+  // ... rest of submit logic
+}
+
+// 3. After each edge function response
+// Inside runScrapeJob or the fetch loop, after getting a result:
+console.log('[EDGE RESPONSE] credits_used:', result.credits_used)
+console.log('[EDGE RESPONSE] balance_after:', result.balance_after)
+console.log('[BALANCE CHECK] Frontend balance (stale?):', balance)
+```
+
+Open browser console (F12), do two scrapes back to back, and check:
+- Does the balance shown at submit time match the actual DB balance?
+- Does the frontend balance update after the first scrape completes?
+- Is the balance_after from the edge function response being used to update state?
+
+---
+
+## STEP 3 — DIAGNOSTIC: Check for orphaned job_reserve rows
+
+```sql
+-- Find jobs where credits were reserved but never settled
+SELECT
+  j.id,
+  j.status,
+  j.downloaded_comments,
+  j.credits_reserved,
+  j.credits_used,
+  j.created_at,
+  -- All ledger entries for this job
+  array_agg(cl.source_type ORDER BY cl.created_at) AS ledger_entries,
+  array_agg(cl.amount ORDER BY cl.created_at)       AS amounts
+FROM public.jobs j
+LEFT JOIN public.credit_ledger cl ON cl.source_id = j.id
+GROUP BY j.id
+ORDER BY j.created_at DESC
+LIMIT 10;
+```
+
+Look for jobs where:
+- ledger_entries contains 'job_reserve' but NO 'job_settle' or 'job_cancel_refund'
+- These are "orphaned reservations" — credits deducted but never returned
+
+---
+
+## STEP 4 — DIAGNOSTIC: Check if frontend is inserting credit_ledger rows
+
+Search the entire codebase for any frontend code that inserts into credit_ledger.
+
+In Replit, search all files for:
+- `credit_ledger`
+- `.insert(` near `credit_ledger`
+- `job_reserve`
+- `source_type`
+
+If you find ANY frontend component or page (not the edge function) doing:
+```typescript
+await supabase.from('credit_ledger').insert(...)
+```
+→ That is a double-deduction bug. The edge function already handles this. REMOVE all frontend credit_ledger inserts.
+
+---
+
+## STEP 5 — DIAGNOSTIC: Check session/JWT expiry
+
+In the scrape page, before calling the edge function, log the token expiry:
+
+```typescript
+const { data: { session } } = await supabase.auth.getSession()
+console.log('[AUTH] Token expires at:', new Date(session!.expires_at! * 1000).toISOString())
+console.log('[AUTH] Token expired?', session!.expires_at! * 1000 < Date.now())
+console.log('[AUTH] Access token (first 20 chars):', session!.access_token.substring(0, 20))
+```
+
+If the token is expired or close to expiry → the edge function auth check fails
+and may return an error that looks like insufficient credits.
+
+---
+
+## NOW APPLY ALL FIXES BASED ON DIAGNOSTICS
+
+---
+
+## FIX A — Refresh balance from DB after every scrape completion
+
+This is the most important fix regardless of what diagnostics show.
+
+Find the `useCredits` hook or wherever balance is fetched. Ensure it:
+1. Fetches fresh from DB on mount
+2. Re-fetches whenever a job completes, fails, or is cancelled
+3. Re-fetches when the page regains focus (user switches tabs and comes back)
+
+```typescript
+// lib/hooks/useCredits.ts — COMPLETE REWRITE
+
+'use client'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { createClient } from '@/lib/supabase/client'
+
+export function useCredits(userId: string | undefined) {
+  const [balance, setBalance] = useState<number>(0)
+  const [loading, setLoading] = useState(true)
+  const supabase = createClient()
+  const intervalRef = useRef<NodeJS.Timeout>()
+
+  const fetchBalance = useCallback(async () => {
+    if (!userId) return
+    try {
+      const { data, error } = await supabase
+        .from('user_credit_balance')
+        .select('balance')
+        .eq('user_id', userId)
+        .single()
+
+      if (!error && data) {
+        console.log('[BALANCE] Fetched from DB:', data.balance)
+        setBalance(data.balance ?? 0)
+      }
+    } catch (err) {
+      console.error('[BALANCE] Failed to fetch:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [userId])
+
+  useEffect(() => {
+    fetchBalance()
+
+    // Poll every 10 seconds (not 30) so balance stays fresh during active use
+    intervalRef.current = setInterval(fetchBalance, 10000)
+
+    // Re-fetch when tab becomes visible again (user switches back)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[BALANCE] Tab became visible — refreshing balance')
+        fetchBalance()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      clearInterval(intervalRef.current)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [fetchBalance])
+
+  return { balance, loading, refetch: fetchBalance }
+}
+```
+
+---
+
+## FIX B — Force balance refresh at these exact moments in the scrape page
+
+In the scrape page component, call `refetch()` (from useCredits) at:
+
+```typescript
+// 1. Right after edge function returns ANY response (success or error)
+// Inside runScrapeJob, after each fetch() call:
+const result = await response.json()
+await refetch()  // Always refresh balance after each invocation
+console.log('[BALANCE] Refreshed after edge function response')
+
+// 2. When job transitions to completed state:
+if (result.done) {
+  await refetch()
+  onComplete(jobId, totalComments)
+  return
+}
+
+// 3. When job transitions to failed/cancelled:
+if (result.cancelled || result.error) {
+  await refetch()
+  // ... handle error
+}
+
+// 4. When user clicks "Start New Scrape" button:
+const handleStartNewScrape = () => {
+  refetch()  // refresh before showing form again
+  setScrapeState('idle')
+  // ...
+}
+```
+
+---
+
+## FIX C — Remove ALL frontend credit_ledger inserts
+
+Search the entire codebase (every .tsx, .ts file) for any code that
+inserts into credit_ledger from the browser/frontend.
+
+The edge function handles ALL credit operations. The frontend must NEVER
+touch credit_ledger directly.
+
+Find and DELETE any code like:
+```typescript
+// DELETE THIS if found anywhere in frontend:
+await supabase.from('credit_ledger').insert({
+  user_id: ...,
+  amount: ...,
+  source_type: 'job_reserve',
+  ...
+})
+```
+
+Also find and DELETE any code that:
+- Inserts a job_reserve row before calling the edge function
+- Deducts credits as part of form submission
+- Manually updates balance
+
+The ONLY frontend credit operations allowed:
+- READ from user_credit_balance view (to display balance)
+- READ from credit_ledger (to show history)
+
+---
+
+## FIX D — Use fresh session token for every edge function call
+
+The JWT token can expire during a long session. Use `getSession()` fresh
+for every invocation in the scrape loop, NOT a cached one from the start:
+
+```typescript
+// WRONG — token captured once at start, stale after 1 hour:
+const { data: { session } } = await supabase.auth.getSession()
+const token = session.access_token  // captured once
+
+while (!done) {
+  const response = await fetch(edgeFunctionUrl, {
+    headers: { 'Authorization': `Bearer ${token}` }  // may be expired by page 5
+  })
+}
+
+// CORRECT — fresh token on every invocation:
+while (!done) {
+  // Get fresh session every time
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) {
+    onError('Session expired. Please refresh the page.')
+    return
+  }
+
+  const response = await fetch(edgeFunctionUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${session.access_token}`,  // always fresh
+      'apikey':        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    },
+    body: JSON.stringify(body),
+  })
+
+  // ... handle response
+}
+```
+
+---
+
+## FIX E — Fix orphaned job_reserve rows (settle credits on completion)
+
+The edge function should settle credits when the job completes.
+Check index.ts in the edge function — after marking the job as 'completed',
+verify it inserts a job_settle row if credits_reserved > credits_used:
+
+```typescript
+// In the edge function, after marking completed:
+// This should already exist — verify it does:
+
+const creditsActuallyUsed = creditsUsed
+const refundAmount = (job.credits_reserved ?? 0) - creditsActuallyUsed
+
+if (refundAmount > 0) {
+  console.log(`[CREDITS] Settling: refunding ${refundAmount} unused reserved credits`)
+  await supabaseAdmin.from('credit_ledger').insert({
+    user_id: user.id,
+    amount: +refundAmount,  // positive = credits back
+    source_type: 'job_reserve',  // or 'refund' — must match your allowed values
+    source_id: job.id,
+    description: `Settle: used ${creditsActuallyUsed} of ${job.credits_reserved} reserved`,
+  })
+}
+```
+
+If this block is MISSING from the edge function → add it. Without it,
+every scrape permanently removes credits_reserved from balance even if
+fewer comments were actually fetched.
+
+---
+
+## FIX F — Clean up orphaned reservations from past jobs
+
+Run this SQL in Supabase to refund any past jobs where credits were reserved
+but never settled:
+
+```sql
+-- Find jobs with orphaned reservations
+WITH job_ledger AS (
+  SELECT
+    j.id          AS job_id,
+    j.user_id,
+    j.status,
+    j.credits_reserved,
+    j.downloaded_comments,
+    COALESCE(SUM(CASE WHEN cl.source_type IN ('job_settle','job_cancel_refund','refund') THEN cl.amount ELSE 0 END), 0) AS already_refunded,
+    COALESCE(SUM(CASE WHEN cl.source_type = 'job_reserve' THEN ABS(cl.amount) ELSE 0 END), 0) AS total_reserved
+  FROM public.jobs j
+  LEFT JOIN public.credit_ledger cl ON cl.source_id = j.id
+  WHERE j.status IN ('completed','cancelled','failed')
+  GROUP BY j.id, j.user_id, j.status, j.credits_reserved, j.downloaded_comments
+)
+SELECT
+  job_id,
+  user_id,
+  status,
+  credits_reserved,
+  downloaded_comments,
+  total_reserved,
+  already_refunded,
+  (total_reserved + already_refunded) AS net_deducted,
+  downloaded_comments AS should_have_deducted,
+  (total_reserved + already_refunded - downloaded_comments) AS over_charged
+FROM job_ledger
+WHERE (total_reserved + already_refunded - COALESCE(downloaded_comments, 0)) > 0
+ORDER BY over_charged DESC;
+```
+
+For each row where `over_charged > 0`, insert a correction:
+
+```sql
+-- Fix one over-charged job (replace values with actual query results):
+INSERT INTO public.credit_ledger (user_id, amount, source_type, source_id, description)
+VALUES (
+  '<user_id>',
+  <over_charged_amount>,     -- positive number = credits back
+  'refund',
+  '<job_id>',
+  'Correction: over-charged credits from orphaned reservation'
+);
+```
+
+---
+
+## FIX G — Add pre-flight balance check with LIVE DB query before scraping
+
+Before calling the edge function, do a LIVE balance check from the database
+(not from React state) to catch stale state issues:
+
+```typescript
+const handleSubmit = async () => {
+  if (!canSubmit) return
+
+  // LIVE balance check — bypass React state entirely
+  const { data: liveBalance } = await supabase
+    .from('user_credit_balance')
+    .select('balance')
+    .single()
+
+  const currentBalance = liveBalance?.balance ?? 0
+  console.log('[PRE-FLIGHT] Live DB balance:', currentBalance)
+  console.log('[PRE-FLIGHT] React state balance:', balance)
+
+  if (currentBalance !== balance) {
+    console.warn('[PRE-FLIGHT] Balance mismatch! DB has', currentBalance, 'but UI shows', balance)
+    // Update the UI balance to match DB
+    await refetch()
+  }
+
+  // For fixed chips: block if live balance is actually insufficient
+  if (maxComments !== null && currentBalance < maxComments) {
+    const shortfall = maxComments - currentBalance
+    toast.error(
+      `You need ${shortfall.toLocaleString()} more credits. Current balance: ${currentBalance.toLocaleString()}.`,
+      {
+        duration: 6000,
+        action: {
+          label: 'Buy credits →',
+          onClick: () => router.push('/dashboard/credits'),
+        },
+      }
+    )
+    return  // Don't start the job
+  }
+
+  // All good — proceed with scrape
+  setIsRunning(true)
+  setScrapeState('running')
+  await runScrapeJob({ ... })
+}
+```
+
+---
+
+## FIX H — Improve edge function logging for debugging
+
+Add detailed logging to the edge function so future issues are easy to diagnose.
+In supabase/functions/fetch-comments/index.ts, at the start of onBatch:
+
+```typescript
+const onBatch = async (batch: any[], _totalSoFar: number): Promise<boolean> => {
+  console.log(`[BATCH] Processing ${batch.length} comments`)
+  console.log(`[BATCH] alreadyFetched=${alreadyFetched} totalInserted=${totalInserted}`)
+
+  // ... existing cancellation check ...
+
+  // Before atomic_credit_deduct:
+  const { data: currentLedger } = await supabase
+    .from('credit_ledger')
+    .select('amount')
+    .eq('user_id', user.id)
+  const currentBalance = (currentLedger ?? []).reduce((s, r) => s + r.amount, 0)
+  console.log(`[CREDITS] Current DB balance before deduct: ${currentBalance}`)
+  console.log(`[CREDITS] Trying to deduct: ${batch.length}`)
+
+  // ... existing rpc call ...
+
+  console.log(`[CREDITS] atomic_credit_deduct result:`, JSON.stringify(deductResult))
+  console.log(`[CREDITS] RPC error:`, rpcErr?.message ?? 'none')
+}
+```
+
+Deploy: `supabase functions deploy fetch-comments`
+
+Then check logs at:
+Supabase Dashboard → Edge Functions → fetch-comments → Logs
+
+---
+
+## TEST PROCEDURE
+
+After applying all fixes, test in this exact sequence:
+
+### Test 1: Verify balance refreshes
+1. Open /dashboard/scrape
+2. Note balance shown (e.g. 8 credits)
+3. Do a small scrape (e.g. Custom → 5 comments)
+4. After completion: check balance in topbar immediately
+5. ✓ Should show reduced balance without page refresh
+
+### Test 2: Verify second scrape works
+1. After Test 1 completes (balance now e.g. 3 credits)
+2. Start a second scrape (All mode or Custom within remaining balance)
+3. ✓ Should work correctly, not stop mid-way
+
+### Test 3: Verify pre-flight catch
+1. Open /dashboard/scrape in two browser tabs
+2. In Tab 1: start a scrape that uses all credits
+3. While it's running, go to Tab 2
+4. In Tab 2: try to start another scrape
+5. ✓ Should show "You need X more credits" toast, NOT start a job
+
+### Test 4: Check browser console during scrape
+1. Open F12 → Console
+2. Start a scrape
+3. Look for these log lines:
+   - `[BALANCE CHECK] At submit time: X` — should match topbar
+   - `[EDGE RESPONSE] balance_after: Y` — should decrease per batch
+   - `[BALANCE] Fetched from DB: Z` — should update after completion
+4. ✓ All three values should be consistent
+
+### Test 5: Check for double deduction
+After any scrape, run in Supabase SQL Editor:
+```sql
+SELECT source_type, COUNT(*), SUM(amount)
+FROM credit_ledger
+GROUP BY source_type
+ORDER BY source_type;
+```
+✓ There should be NO duplicate job_reserve rows for the same job_id
+
+---
+
+## SUMMARY: What to fix in priority order
+
+1. FIX A + B — Balance not refreshing after scrape (most likely cause)
+2. FIX C — Remove any frontend credit_ledger inserts (double deduction)
+3. FIX D — Use fresh JWT token per invocation (auth expiry)
+4. FIX G — Live balance pre-flight check before submitting
+5. FIX E — Ensure edge function settles credits on completion
+6. FIX F — Clean up orphaned reservations in DB (SQL fix)
+7. FIX H — Add logging to edge function for future debugging
