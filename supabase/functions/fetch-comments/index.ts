@@ -61,9 +61,9 @@ serve(async (req) => {
     // ── 2. Parse body ────────────────────────────────────────
     // Comments fetched per Edge Function invocation (measured at page boundaries).
     // Supabase free plan has ~150s timeout. With parallel reply fetching each page
-    // takes ~5-10s, so 2000 comments ≈ 2-10 pages ≈ 10-100s — safe margin.
+    // takes ~5-10s, so 500 comments ≈ 1-5 pages ≈ well within the timeout.
     // The backend chains multiple calls via pageToken to fetch everything.
-    const PER_INVOCATION_LIMIT = 2000;
+    const PER_INVOCATION_LIMIT = 500;
 
     const body = await req.json();
     const {
