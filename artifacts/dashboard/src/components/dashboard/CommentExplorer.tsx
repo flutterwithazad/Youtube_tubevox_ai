@@ -297,7 +297,7 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
       {/* ── Toolbar ──────────────────────────────────────────────────────────── */}
       <div
         ref={toolbarRef}
-        className="flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 border-b border-border shrink-0 gap-3"
+        className="relative flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 border-b border-border shrink-0 gap-3"
       >
         <div className="min-w-0">
           <h3 className="font-display font-bold text-foreground truncate">{videoTitle || "Untitled Video"}</h3>
@@ -308,7 +308,8 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
           </p>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0 overflow-x-auto pb-1 sm:pb-0">
+        {/* Buttons row — no overflow context so panels can escape */}
+        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
           {/* Search */}
           <button
             onClick={() => { setShowSearch(v => !v); setOpenPanel(null); }}
@@ -319,309 +320,45 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
           </button>
 
           {/* Sort */}
-          <div className="relative">
-            <button
-              onClick={() => togglePanel("sort")}
-              className={`${BtnBase} ${openPanel === "sort" ? BtnActive : ""}`}
-            >
-              <ArrowUpDown className="w-4 h-4" />
-              <span className="hidden sm:inline">{sortLabel}</span>
-            </button>
-            {openPanel === "sort" && (
-              <div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-xl shadow-lg z-50 py-1 overflow-hidden">
-                {(["likes", "newest", "oldest"] as SortOrder[]).map(opt => (
-                  <button
-                    key={opt}
-                    onClick={() => { setSortOrder(opt); setOpenPanel(null); }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
-                  >
-                    <Check className={`w-3.5 h-3.5 shrink-0 ${sortOrder === opt ? "text-primary" : "opacity-0"}`} />
-                    {opt === "likes" ? "Top likes" : opt === "newest" ? "Newest first" : "Oldest first"}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <button
+            onClick={() => togglePanel("sort")}
+            className={`${BtnBase} ${openPanel === "sort" ? BtnActive : ""}`}
+          >
+            <ArrowUpDown className="w-4 h-4" />
+            <span className="hidden sm:inline">{sortLabel}</span>
+          </button>
 
           {/* Filter */}
-          <div className="relative">
-            <button
-              onClick={() => togglePanel("filter")}
-              className={`${BtnBase} ${openPanel === "filter" ? BtnActive : ""}`}
-            >
-              <SlidersHorizontal className="w-4 h-4" />
-              <span className="hidden sm:inline">Filter</span>
-              {activeFilterCount > 0 && (
-                <span className="ml-0.5 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
-                  {activeFilterCount}
-                </span>
-              )}
-            </button>
-
-            {openPanel === "filter" && (
-              <div className="absolute top-full right-0 mt-1 w-80 bg-popover border border-border rounded-xl shadow-lg z-50 overflow-hidden">
-                {/* Tab bar */}
-                <div className="flex border-b border-border">
-                  {(["simple", "advanced"] as const).map(tab => (
-                    <button
-                      key={tab}
-                      onClick={() => setFilterTab(tab)}
-                      className={`flex-1 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors ${filterTab === tab ? "border-b-2 border-primary text-primary bg-primary/5" : "text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="p-4 space-y-4 max-h-[400px] overflow-y-auto">
-                  {filterTab === "simple" ? (
-                    <>
-                      {/* Include replies toggle */}
-                      <label className="flex items-center justify-between gap-3 cursor-pointer">
-                        <span className="text-sm font-medium text-foreground">Include replies</span>
-                        <div
-                          onClick={() => setSimpleFilters(p => ({ ...p, includeReplies: !p.includeReplies }))}
-                          className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${simpleFilters.includeReplies ? "bg-primary" : "bg-border"}`}
-                        >
-                          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${simpleFilters.includeReplies ? "translate-x-4" : ""}`} />
-                        </div>
-                      </label>
-
-                      {/* Author search */}
-                      <div>
-                        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Comment author</label>
-                        <input
-                          type="text"
-                          placeholder="Search by author…"
-                          value={simpleFilters.authorSearch}
-                          onChange={e => setSimpleFilters(p => ({ ...p, authorSearch: e.target.value }))}
-                          className="mt-1.5 w-full px-3 py-2 text-sm bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/50"
-                        />
-                      </div>
-
-                      {/* Comment-with pills */}
-                      <div>
-                        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Comments with</label>
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          {["questions", "mentions", "hashtags", "emojis"].map(pill => {
-                            const active = simpleFilters.commentWith.includes(pill);
-                            return (
-                              <button
-                                key={pill}
-                                onClick={() => togglePill(pill)}
-                                className={`px-3 py-1 rounded-full text-xs font-semibold capitalize transition-colors ${active ? "bg-red-600 text-white" : "bg-secondary text-muted-foreground hover:text-foreground"}`}
-                              >
-                                {pill === "questions" ? "❓ Questions" : pill === "mentions" ? "@ Mentions" : pill === "hashtags" ? "# Hashtags" : "😀 Emojis"}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Min likes slider */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Min. likes</label>
-                          <span className="text-xs font-mono text-foreground">{simpleFilters.minLikes.toLocaleString()}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={maxLikes || 100}
-                          value={simpleFilters.minLikes}
-                          onChange={e => setSimpleFilters(p => ({ ...p, minLikes: Number(e.target.value) }))}
-                          className="w-full accent-red-600 cursor-pointer"
-                        />
-                        <div className="flex justify-between text-[10px] text-muted-foreground/60 mt-0.5">
-                          <span>0</span>
-                          <span>{(maxLikes || 100).toLocaleString()}</span>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={clearSimple}
-                        className="w-full py-2 text-xs font-semibold text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
-                      >
-                        Clear all filters
-                      </button>
-                    </>
-                  ) : (
-                    /* Advanced tab */
-                    <>
-                      {/* Match mode */}
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="text-muted-foreground">Match</span>
-                        {(["all", "any"] as const).map(mode => (
-                          <button
-                            key={mode}
-                            onClick={() => setMatchMode(mode)}
-                            className={`px-3 py-1 rounded-lg text-xs font-bold border transition-colors ${matchMode === mode ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:bg-secondary"}`}
-                          >
-                            {mode}
-                          </button>
-                        ))}
-                        <span className="text-muted-foreground">conditions</span>
-                      </div>
-
-                      {/* Rules */}
-                      <div className="space-y-2">
-                        {advancedRules.map(rule => (
-                          <div key={rule.id} className="flex items-center gap-1.5 flex-wrap">
-                            <select
-                              value={rule.field}
-                              onChange={e => updateRule(rule.id, { field: e.target.value as FilterRule["field"] })}
-                              className="flex-1 min-w-0 px-2 py-1.5 text-xs bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 cursor-pointer"
-                            >
-                              <option value="text">Comment text</option>
-                              <option value="author">Author</option>
-                              <option value="likes">Likes</option>
-                              <option value="is_reply">Is reply</option>
-                            </select>
-
-                            <select
-                              value={rule.operator}
-                              onChange={e => updateRule(rule.id, { operator: e.target.value })}
-                              className="flex-1 min-w-0 px-2 py-1.5 text-xs bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 cursor-pointer"
-                            >
-                              {operatorsFor(rule.field).map(op => (
-                                <option key={op} value={op}>{op}</option>
-                              ))}
-                            </select>
-
-                            {rule.field !== "is_reply" && (
-                              <input
-                                type={rule.field === "likes" ? "number" : "text"}
-                                value={rule.value}
-                                onChange={e => updateRule(rule.id, { value: e.target.value })}
-                                placeholder="value"
-                                className="w-20 px-2 py-1.5 text-xs bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/40"
-                              />
-                            )}
-
-                            <button
-                              onClick={() => removeRule(rule.id)}
-                              className="p-1.5 text-muted-foreground hover:text-red-600 transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex gap-2">
-                        <button
-                          onClick={addRule}
-                          className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold text-primary border border-primary/30 rounded-lg hover:bg-primary/5 transition-colors"
-                        >
-                          <Plus className="w-3.5 h-3.5" /> Add Rule
-                        </button>
-                        {advancedRules.length > 0 && (
-                          <button
-                            onClick={() => setAdvancedRules([])}
-                            className="px-3 py-2 text-xs font-semibold text-muted-foreground border border-border rounded-lg hover:bg-secondary transition-colors"
-                          >
-                            Clear All
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
+          <button
+            onClick={() => togglePanel("filter")}
+            className={`${BtnBase} ${openPanel === "filter" ? BtnActive : ""}`}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            <span className="hidden sm:inline">Filter</span>
+            {activeFilterCount > 0 && (
+              <span className="ml-0.5 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+                {activeFilterCount}
+              </span>
             )}
-          </div>
+          </button>
 
           {/* Fields */}
-          <div className="relative">
-            <button
-              onClick={() => togglePanel("fields")}
-              className={`${BtnBase} ${openPanel === "fields" ? BtnActive : ""}`}
-            >
-              <Columns3 className="w-4 h-4" />
-              <span className="hidden sm:inline">Fields</span>
-            </button>
-
-            {openPanel === "fields" && (
-              <div className="absolute top-full right-0 mt-1 w-52 bg-popover border border-border rounded-xl shadow-lg z-50 py-2 overflow-hidden">
-                {(
-                  [
-                    { key: "published",     label: "Published" },
-                    { key: "author",        label: "Author" },
-                    { key: "likes",         label: "Likes" },
-                    { key: "replies",       label: "Reply count" },
-                    { key: "language",      label: "Language" },
-                    { key: "authorChannel", label: "Author channel" },
-                  ] as { key: keyof typeof visibleFields; label: string }[]
-                ).map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => toggleField(key)}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
-                  >
-                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${visibleFields[key] ? "bg-primary border-primary" : "border-border"}`}>
-                      {visibleFields[key] && <Check className="w-2.5 h-2.5 text-white" />}
-                    </div>
-                    {label}
-                  </button>
-                ))}
-
-                {/* Grayed-out unavailable fields */}
-                <div className="border-t border-border/50 mt-1 pt-1">
-                  {["Heart", "Pinned", "Paid"].map(name => (
-                    <div key={name} className="flex items-center gap-3 px-3 py-2.5 text-sm text-muted-foreground/40 cursor-not-allowed">
-                      <Lock className="w-3.5 h-3.5 shrink-0" />
-                      {name}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <button
+            onClick={() => togglePanel("fields")}
+            className={`${BtnBase} ${openPanel === "fields" ? BtnActive : ""}`}
+          >
+            <Columns3 className="w-4 h-4" />
+            <span className="hidden sm:inline">Fields</span>
+          </button>
 
           {/* Export */}
-          <div className="relative">
-            <button
-              onClick={() => togglePanel("export")}
-              className={`${BtnBase} ${openPanel === "export" ? BtnActive : ""} text-primary`}
-            >
-              <Download className="w-4 h-4" />
-              <span className="hidden sm:inline">Export</span>
-            </button>
-
-            {openPanel === "export" && (
-              <div className="absolute top-full right-0 mt-1 w-64 bg-popover border border-border rounded-xl shadow-lg z-50 overflow-hidden">
-                <div className="px-3 py-2.5 bg-secondary/50 border-b border-border">
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Export what you see (filtered)</p>
-                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">{displayedComments.length.toLocaleString()} comments</p>
-                </div>
-                {(["csv", "xlsx", "json"] as const).map(fmt => (
-                  <button
-                    key={fmt}
-                    onClick={() => { exportFiltered(fmt); setOpenPanel(null); }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5 text-muted-foreground" />
-                    {fmt === "csv" ? "Spreadsheet (CSV)" : fmt === "xlsx" ? "Excel (XLSX)" : "Raw data (JSON)"}
-                  </button>
-                ))}
-
-                <div className="px-3 py-2.5 bg-secondary/50 border-y border-border mt-1">
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Export full data (all comments)</p>
-                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">{totalCount.toLocaleString()} comments</p>
-                </div>
-                {(["csv", "xlsx", "json"] as const).map(fmt => (
-                  <button
-                    key={"all-" + fmt}
-                    onClick={() => { exportAll(fmt); setOpenPanel(null); }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5 text-muted-foreground" />
-                    {fmt === "csv" ? "Spreadsheet (CSV)" : fmt === "xlsx" ? "Excel (XLSX)" : "Raw data (JSON)"}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <button
+            onClick={() => togglePanel("export")}
+            className={`${BtnBase} ${openPanel === "export" ? BtnActive : ""} text-primary`}
+          >
+            <Download className="w-4 h-4" />
+            <span className="hidden sm:inline">Export</span>
+          </button>
 
           {/* Fullscreen */}
           <button
@@ -631,6 +368,265 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
         </div>
+
+        {/* ── Dropdown panels — rendered outside overflow-x-auto, anchored to toolbar ── */}
+
+        {openPanel === "sort" && (
+          <div className="absolute top-full right-0 mt-1 w-44 bg-popover border border-border rounded-xl shadow-lg z-50 py-1">
+            {(["likes", "newest", "oldest"] as SortOrder[]).map(opt => (
+              <button
+                key={opt}
+                onClick={() => { setSortOrder(opt); setOpenPanel(null); }}
+                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
+              >
+                <Check className={`w-3.5 h-3.5 shrink-0 ${sortOrder === opt ? "text-primary" : "opacity-0"}`} />
+                {opt === "likes" ? "Top likes" : opt === "newest" ? "Newest first" : "Oldest first"}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {openPanel === "filter" && (
+          <div className="absolute top-full right-0 mt-1 w-80 bg-popover border border-border rounded-xl shadow-lg z-50">
+            {/* Tab bar */}
+            <div className="flex border-b border-border rounded-t-xl overflow-hidden">
+              {(["simple", "advanced"] as const).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setFilterTab(tab)}
+                  className={`flex-1 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors ${filterTab === tab ? "border-b-2 border-primary text-primary bg-primary/5" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            <div className="p-4 space-y-4 max-h-[400px] overflow-y-auto">
+              {filterTab === "simple" ? (
+                <>
+                  {/* Include replies toggle */}
+                  <label className="flex items-center justify-between gap-3 cursor-pointer">
+                    <span className="text-sm font-medium text-foreground">Include replies</span>
+                    <div
+                      onClick={() => setSimpleFilters(p => ({ ...p, includeReplies: !p.includeReplies }))}
+                      className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${simpleFilters.includeReplies ? "bg-primary" : "bg-border"}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${simpleFilters.includeReplies ? "translate-x-4" : ""}`} />
+                    </div>
+                  </label>
+
+                  {/* Author search */}
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Comment author</label>
+                    <input
+                      type="text"
+                      placeholder="Search by author…"
+                      value={simpleFilters.authorSearch}
+                      onChange={e => setSimpleFilters(p => ({ ...p, authorSearch: e.target.value }))}
+                      className="mt-1.5 w-full px-3 py-2 text-sm bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/50"
+                    />
+                  </div>
+
+                  {/* Comment-with pills */}
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Comments with</label>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {["questions", "mentions", "hashtags", "emojis"].map(pill => {
+                        const active = simpleFilters.commentWith.includes(pill);
+                        return (
+                          <button
+                            key={pill}
+                            onClick={() => togglePill(pill)}
+                            className={`px-3 py-1 rounded-full text-xs font-semibold capitalize transition-colors ${active ? "bg-red-600 text-white" : "bg-secondary text-muted-foreground hover:text-foreground"}`}
+                          >
+                            {pill === "questions" ? "❓ Questions" : pill === "mentions" ? "@ Mentions" : pill === "hashtags" ? "# Hashtags" : "😀 Emojis"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Min likes slider */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Min. likes</label>
+                      <span className="text-xs font-mono text-foreground">{simpleFilters.minLikes.toLocaleString()}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={maxLikes || 100}
+                      value={simpleFilters.minLikes}
+                      onChange={e => setSimpleFilters(p => ({ ...p, minLikes: Number(e.target.value) }))}
+                      className="w-full accent-red-600 cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[10px] text-muted-foreground/60 mt-0.5">
+                      <span>0</span>
+                      <span>{(maxLikes || 100).toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={clearSimple}
+                    className="w-full py-2 text-xs font-semibold text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
+                  >
+                    Clear all filters
+                  </button>
+                </>
+              ) : (
+                /* Advanced tab */
+                <>
+                  {/* Match mode */}
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">Match</span>
+                    {(["all", "any"] as const).map(mode => (
+                      <button
+                        key={mode}
+                        onClick={() => setMatchMode(mode)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold border transition-colors ${matchMode === mode ? "bg-primary text-white border-primary" : "border-border text-muted-foreground hover:bg-secondary"}`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                    <span className="text-muted-foreground">conditions</span>
+                  </div>
+
+                  {/* Rules */}
+                  <div className="space-y-2">
+                    {advancedRules.map(rule => (
+                      <div key={rule.id} className="flex items-center gap-1.5 flex-wrap">
+                        <select
+                          value={rule.field}
+                          onChange={e => updateRule(rule.id, { field: e.target.value as FilterRule["field"] })}
+                          className="flex-1 min-w-0 px-2 py-1.5 text-xs bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 cursor-pointer"
+                        >
+                          <option value="text">Comment text</option>
+                          <option value="author">Author</option>
+                          <option value="likes">Likes</option>
+                          <option value="is_reply">Is reply</option>
+                        </select>
+
+                        <select
+                          value={rule.operator}
+                          onChange={e => updateRule(rule.id, { operator: e.target.value })}
+                          className="flex-1 min-w-0 px-2 py-1.5 text-xs bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 cursor-pointer"
+                        >
+                          {operatorsFor(rule.field).map(op => (
+                            <option key={op} value={op}>{op}</option>
+                          ))}
+                        </select>
+
+                        {rule.field !== "is_reply" && (
+                          <input
+                            type={rule.field === "likes" ? "number" : "text"}
+                            value={rule.value}
+                            onChange={e => updateRule(rule.id, { value: e.target.value })}
+                            placeholder="value"
+                            className="w-20 px-2 py-1.5 text-xs bg-background border border-border rounded-lg outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/40"
+                          />
+                        )}
+
+                        <button
+                          onClick={() => removeRule(rule.id)}
+                          className="p-1.5 text-muted-foreground hover:text-red-600 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={addRule}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold text-primary border border-primary/30 rounded-lg hover:bg-primary/5 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Rule
+                    </button>
+                    {advancedRules.length > 0 && (
+                      <button
+                        onClick={() => setAdvancedRules([])}
+                        className="px-3 py-2 text-xs font-semibold text-muted-foreground border border-border rounded-lg hover:bg-secondary transition-colors"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {openPanel === "fields" && (
+          <div className="absolute top-full right-0 mt-1 w-52 bg-popover border border-border rounded-xl shadow-lg z-50 py-2">
+            {(
+              [
+                { key: "published",     label: "Published" },
+                { key: "author",        label: "Author" },
+                { key: "likes",         label: "Likes" },
+                { key: "replies",       label: "Reply count" },
+                { key: "language",      label: "Language" },
+                { key: "authorChannel", label: "Author channel" },
+              ] as { key: keyof typeof visibleFields; label: string }[]
+            ).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => toggleField(key)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
+              >
+                <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${visibleFields[key] ? "bg-primary border-primary" : "border-border"}`}>
+                  {visibleFields[key] && <Check className="w-2.5 h-2.5 text-white" />}
+                </div>
+                {label}
+              </button>
+            ))}
+
+            {/* Grayed-out unavailable fields */}
+            <div className="border-t border-border/50 mt-1 pt-1">
+              {["Heart", "Pinned", "Paid"].map(name => (
+                <div key={name} className="flex items-center gap-3 px-3 py-2.5 text-sm text-muted-foreground/40 cursor-not-allowed">
+                  <Lock className="w-3.5 h-3.5 shrink-0" />
+                  {name}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {openPanel === "export" && (
+          <div className="absolute top-full right-0 mt-1 w-64 bg-popover border border-border rounded-xl shadow-lg z-50">
+            <div className="px-3 py-2.5 bg-secondary/50 border-b border-border rounded-t-xl">
+              <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Export what you see (filtered)</p>
+              <p className="text-[10px] text-muted-foreground/70 mt-0.5">{displayedComments.length.toLocaleString()} comments</p>
+            </div>
+            {(["csv", "xlsx", "json"] as const).map(fmt => (
+              <button
+                key={fmt}
+                onClick={() => { exportFiltered(fmt); setOpenPanel(null); }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
+              >
+                <Download className="w-3.5 h-3.5 text-muted-foreground" />
+                {fmt === "csv" ? "Spreadsheet (CSV)" : fmt === "xlsx" ? "Excel (XLSX)" : "Raw data (JSON)"}
+              </button>
+            ))}
+
+            <div className="px-3 py-2.5 bg-secondary/50 border-y border-border mt-1">
+              <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Export full data (all comments)</p>
+              <p className="text-[10px] text-muted-foreground/70 mt-0.5">{totalCount.toLocaleString()} comments</p>
+            </div>
+            {(["csv", "xlsx", "json"] as const).map(fmt => (
+              <button
+                key={"all-" + fmt}
+                onClick={() => { exportAll(fmt); setOpenPanel(null); }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left hover:bg-secondary transition-colors"
+              >
+                <Download className="w-3.5 h-3.5 text-muted-foreground" />
+                {fmt === "csv" ? "Spreadsheet (CSV)" : fmt === "xlsx" ? "Excel (XLSX)" : "Raw data (JSON)"}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Search Bar ───────────────────────────────────────────────────────── */}
