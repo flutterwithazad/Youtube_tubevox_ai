@@ -68,6 +68,7 @@ export default function Scrape() {
     maxComments: number | null;
     videoUrl: string;
     initialCommentCount: number;
+    initialCreditsUsed: number;
   } | null>(null);
 
   // On load: check for an existing active/stuck job
@@ -94,6 +95,18 @@ export default function Scrape() {
       // entire scrape even though credits were available. We now reconnect instead.
       const STALE_MS = 10 * 60 * 1000; // 10 minutes
 
+      // Always load credits spent from the ledger regardless of whether the job is
+      // fresh or stale — used both for the running counter and the completed banner.
+      const { data: ledgerRows } = await supabase
+        .from("credit_ledger")
+        .select("amount")
+        .eq("source_id", data.id)
+        .eq("source_type", "job_reserve");
+      const creditsSpent = ledgerRows
+        ? Math.abs(ledgerRows.reduce((sum: number, r: any) => sum + r.amount, 0))
+        : 0;
+      setLiveCreditsUsed(creditsSpent);
+
       if (ageMs < STALE_MS) {
         // Hydrate UI with the job's current data regardless of resume path.
         setActiveJobId(data.id);
@@ -113,11 +126,12 @@ export default function Scrape() {
           setIsRunning(true);
           setState("running");
           resumeOptsRef.current = {
-            jobId:               data.id,
-            pageToken:           resumeToken,
-            maxComments:         data.requested_comments ?? null,
-            videoUrl:            data.video_url ?? '',
-            initialCommentCount: comments,
+            jobId:                data.id,
+            pageToken:            resumeToken,
+            maxComments:          data.requested_comments ?? null,
+            videoUrl:             data.video_url ?? '',
+            initialCommentCount:  comments,
+            initialCreditsUsed:   creditsSpent,
           };
           toast.info("Resuming your interrupted scrape...", { duration: 4000 });
           // Defer one tick so React flushes the state updates before the async loop starts.
@@ -186,19 +200,30 @@ export default function Scrape() {
       setLiveCommentCount((prev) => Math.max(prev, count));
       setActiveJob(job);
 
-      if (job.status === "completed") {
-        clearInterval(interval);
-        reconnectedRef.current = false;
-        setIsRunning(false);
-        setState("completed");
-        refetchBalance();
-        toast.success(`✓ ${count.toLocaleString()} comments scraped!`);
-      } else if (job.status === "cancelled") {
+      if (job.status === "completed" || job.status === "cancelled") {
         clearInterval(interval);
         reconnectedRef.current = false;
         setIsRunning(false);
         refetchBalance();
-        if (count >= 100) {
+
+        // Refresh the credits counter from the DB ledger so it shows the real
+        // total spent, not 0 (from a reconnect) or a partial count.
+        const { data: ledgerRows } = await supabase
+          .from("credit_ledger")
+          .select("amount")
+          .eq("source_id", activeJobId)
+          .eq("source_type", "job_reserve");
+        if (ledgerRows) {
+          const creditsSpent = Math.abs(
+            ledgerRows.reduce((sum: number, r: any) => sum + r.amount, 0)
+          );
+          setLiveCreditsUsed(creditsSpent);
+        }
+
+        if (job.status === "completed") {
+          setState("completed");
+          toast.success(`✓ ${count.toLocaleString()} comments scraped!`);
+        } else if (count >= 100) {
           setIsPartialResult(true);
           setState("completed");
           toast.warning(`Scrape stopped at ${count.toLocaleString()} comments. Showing available data.`);
@@ -380,7 +405,7 @@ export default function Scrape() {
       let pageToken: string | null = resumeOpts?.pageToken ?? null;
       let totalComments = resumeOpts?.initialCommentCount ?? 0;
       let prevTotalComments = totalComments;
-      let totalCreditsUsed = 0;
+      let totalCreditsUsed = resumeOpts?.initialCreditsUsed ?? 0;
       let invocationCount = 0;
       const MAX_INVOCATIONS = 100;
 
@@ -1075,7 +1100,7 @@ export default function Scrape() {
                   <div className="min-w-0">
                     <h4 className="font-bold text-amber-900 text-sm truncate">Partial Results Available</h4>
                     <p className="text-xs text-amber-700">
-                      {liveCommentCount.toLocaleString()} comments collected ·{' '}
+                      {(activeJob?.downloaded_comments ?? liveCommentCount).toLocaleString()} comments collected ·{' '}
                       {activeJob?.status === 'cancelled' ? 'Job was cancelled' : 'Credits ran out'}
                       {' '}· <a href="/dashboard/credits" className="underline font-semibold">Buy more credits →</a>
                     </p>
@@ -1097,7 +1122,7 @@ export default function Scrape() {
                   <div className="min-w-0">
                     <h4 className="font-bold text-foreground text-sm truncate">Scrape Completed</h4>
                     <p className="text-xs text-muted-foreground">
-                      {liveCommentCount.toLocaleString()} comments · {liveCreditsUsed.toLocaleString()} credits used
+                      {(activeJob?.downloaded_comments ?? liveCommentCount).toLocaleString()} comments · {liveCreditsUsed.toLocaleString()} credits used
                     </p>
                   </div>
                 </div>
@@ -1110,11 +1135,11 @@ export default function Scrape() {
               </div>
             )}
 
-            {activeJobId && liveCommentCount > 0 ? (
+            {activeJobId && (activeJob?.downloaded_comments ?? liveCommentCount) > 0 ? (
               <CommentExplorer
                 jobId={activeJobId}
                 videoTitle={activeJob?.video_title || "Scraped Video"}
-                totalCount={liveCommentCount}
+                totalCount={activeJob?.downloaded_comments ?? liveCommentCount}
                 isPartial={isPartialResult}
                 jobStatus={activeJob?.status}
               />
