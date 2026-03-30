@@ -320,6 +320,15 @@ export default function Scrape() {
     return () => clearInterval(interval);
   }, [isRunning, activeJobId, isReconnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-dismiss: the moment the completed screen appears, record the job ID in
+  // sessionStorage so that the *next* tab switch skips restoring it.
+  // The user sees the results exactly once per scrape without having to click anything.
+  useEffect(() => {
+    if (state === "completed" && activeJobId) {
+      sessionStorage.setItem("dismissed_job_id", activeJobId);
+    }
+  }, [state, activeJobId]);
+
   // Debounced URL handler
   const handleUrlChange = (value: string) => {
     setVideoUrl(value);
