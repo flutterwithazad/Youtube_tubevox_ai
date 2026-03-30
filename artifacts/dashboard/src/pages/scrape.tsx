@@ -84,7 +84,41 @@ export default function Scrape() {
         .limit(1)
         .maybeSingle();
 
-      if (!data) return;
+      if (!data) {
+        // No active job — check for a recently completed/cancelled job (last 2 hours)
+        // so the user's results survive a page refresh.
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const { data: recent } = await supabase
+          .from("jobs")
+          .select("*")
+          .eq("user_id", user.id)
+          .in("status", ["completed", "cancelled"])
+          .gte("completed_at", twoHoursAgo)
+          .order("completed_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (recent && (recent.downloaded_comments ?? 0) >= 100) {
+          // Load credits spent for this job
+          const { data: ledgerRows } = await supabase
+            .from("credit_ledger")
+            .select("amount")
+            .eq("source_id", recent.id)
+            .eq("source_type", "job_reserve");
+          const creditsSpent = ledgerRows
+            ? Math.abs(ledgerRows.reduce((sum: number, r: any) => sum + r.amount, 0))
+            : 0;
+
+          setActiveJobId(recent.id);
+          setActiveJob(recent);
+          setLiveCommentCount(recent.downloaded_comments ?? 0);
+          setLiveCreditsUsed(creditsSpent);
+          if (recent.video_url) setVideoUrl(recent.video_url);
+          if (recent.status === "cancelled") setIsPartialResult(true);
+          setState("completed");
+        }
+        return;
+      }
 
       const comments = data.downloaded_comments ?? 0;
       const startedAt = data.started_at ? new Date(data.started_at) : null;
@@ -282,7 +316,7 @@ export default function Scrape() {
       }
       setVideoId(id);
       setPreviewLoading(true);
-      const preview = await fetchVideoPreview(id);
+      const preview = await fetchVideoPreview(id, value.trim());
       setPreviewLoading(false);
       if (!preview) {
         setUrlError('Could not load video info. The video may be private or unavailable.');
