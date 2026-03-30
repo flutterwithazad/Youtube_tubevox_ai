@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Search, ArrowUpDown, SlidersHorizontal, Download,
   Maximize2, Minimize2, CornerDownRight,
-  Columns3, Check, Plus, Trash2, Lock, X,
+  Columns3, Check, Plus, Trash2, X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getAvatarColor } from "@/lib/utils/youtube";
@@ -75,12 +75,14 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
 
   // ── Field visibility state ────────────────────────────────────────────────────
   const [visibleFields, setVisibleFields] = useState({
-    published:     true,
-    author:        true,
-    likes:         true,
-    replies:       true,
-    language:      false,
-    authorChannel: false,
+    published:       true,
+    author:          true,
+    likes:           true,
+    replies:         true,
+    heart:           false,
+    pinned:          false,
+    paid:            false,
+    authorChannel:   false,
   });
 
   // ── Toolbar panel ref for click-outside ──────────────────────────────────────
@@ -174,7 +176,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
     "1fr",
     visibleFields.likes         ? "72px"  : null,
     visibleFields.replies       ? "64px"  : null,
-    visibleFields.language      ? "80px"  : null,
+    visibleFields.heart         ? "56px"  : null,
+    visibleFields.pinned        ? "60px"  : null,
+    visibleFields.paid          ? "56px"  : null,
     visibleFields.authorChannel ? "150px" : null,
   ].filter(Boolean).join(" "), [visibleFields]);
 
@@ -570,7 +574,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
                 { key: "author",        label: "Author" },
                 { key: "likes",         label: "Likes" },
                 { key: "replies",       label: "Reply count" },
-                { key: "language",      label: "Language" },
+                { key: "heart",         label: "❤️ Heart" },
+                { key: "pinned",        label: "📌 Pinned" },
+                { key: "paid",          label: "💰 Paid" },
                 { key: "authorChannel", label: "Author channel" },
               ] as { key: keyof typeof visibleFields; label: string }[]
             ).map(({ key, label }) => (
@@ -585,16 +591,6 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
                 {label}
               </button>
             ))}
-
-            {/* Grayed-out unavailable fields */}
-            <div className="border-t border-border/50 mt-1 pt-1">
-              {["Heart", "Pinned", "Paid"].map(name => (
-                <div key={name} className="flex items-center gap-3 px-3 py-2.5 text-sm text-muted-foreground/40 cursor-not-allowed">
-                  <Lock className="w-3.5 h-3.5 shrink-0" />
-                  {name}
-                </div>
-              ))}
-            </div>
           </div>
         )}
 
@@ -683,7 +679,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
         <div>Comment</div>
         {visibleFields.likes         && <div className="text-right">Likes</div>}
         {visibleFields.replies       && <div className="text-right">Replies</div>}
-        {visibleFields.language      && <div>Lang</div>}
+        {visibleFields.heart         && <div className="text-center">Heart</div>}
+        {visibleFields.pinned        && <div className="text-center">Pinned</div>}
+        {visibleFields.paid          && <div className="text-center">Paid</div>}
         {visibleFields.authorChannel && <div>Channel</div>}
       </div>
 
@@ -698,7 +696,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
               <Skeleton className="h-4 w-full" />
               {visibleFields.likes         && <Skeleton className="h-4 w-10 ml-auto" />}
               {visibleFields.replies       && <Skeleton className="h-4 w-8 ml-auto" />}
-              {visibleFields.language      && <Skeleton className="h-4 w-8" />}
+              {visibleFields.heart         && <Skeleton className="h-4 w-6 mx-auto" />}
+              {visibleFields.pinned        && <Skeleton className="h-4 w-6 mx-auto" />}
+              {visibleFields.paid          && <Skeleton className="h-4 w-6 mx-auto" />}
               {visibleFields.authorChannel && <Skeleton className="h-4 w-24" />}
             </div>
           ))
@@ -757,9 +757,19 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
                       {c.reply_count > 0 ? c.reply_count : "-"}
                     </div>
                   )}
-                  {visibleFields.language && (
-                    <div className="text-xs text-muted-foreground pt-1 truncate">
-                      {c.language ?? "—"}
+                  {visibleFields.heart && (
+                    <div className="text-center pt-1">
+                      {c.liked_by_creator ? <span title="Hearted by creator">❤️</span> : <span className="text-muted-foreground/30 text-xs">—</span>}
+                    </div>
+                  )}
+                  {visibleFields.pinned && (
+                    <div className="text-center pt-1">
+                      {c.is_pinned ? <span title="Pinned comment">📌</span> : <span className="text-muted-foreground/30 text-xs">—</span>}
+                    </div>
+                  )}
+                  {visibleFields.paid && (
+                    <div className="text-center pt-1">
+                      {c.is_paid ? <span title="Paid comment">💰</span> : <span className="text-muted-foreground/30 text-xs">—</span>}
                     </div>
                   )}
                   {visibleFields.authorChannel && (
