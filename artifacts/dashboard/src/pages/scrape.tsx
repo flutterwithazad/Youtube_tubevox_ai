@@ -101,7 +101,10 @@ export default function Scrape() {
           .limit(1)
           .maybeSingle();
 
-        if (recent && (recent.downloaded_comments ?? 0) >= 100) {
+        // Only restore a completed job if the user hasn't already dismissed it
+        // in this browser session (clicked "Start New Scrape").
+        const dismissedId = sessionStorage.getItem("dismissed_job_id");
+        if (recent && (recent.downloaded_comments ?? 0) >= 100 && dismissedId !== recent.id) {
           // Load credits spent for this job
           const { data: ledgerRows } = await supabase
             .from("credit_ledger")
@@ -126,11 +129,23 @@ export default function Scrape() {
       const comments = data.downloaded_comments ?? 0;
       const startedAt = data.started_at ? new Date(data.started_at) : null;
       const ageMs = startedAt ? Date.now() - startedAt.getTime() : Infinity;
-      // Jobs started within the last 10 minutes are considered fresh.
-      // The edge function runs server-side independently of the browser — cancelling
-      // the DB record (old behaviour) made onBatch() read 'cancelled' and abort the
-      // entire scrape even though credits were available. We now reconnect instead.
-      const STALE_MS = 10 * 60 * 1000; // 10 minutes
+
+      // A job is only considered truly abandoned if it has been stuck in
+      // "running" for more than 24 hours with no lock activity.
+      // Previously this was 10 minutes, which auto-cancelled large scrapes
+      // (50k+ comments can legitimately take 30-50 minutes) every time the
+      // user switched tabs. The edge function handles its own cleanup on
+      // timeout/completion — we should trust it and only cancel genuine orphans.
+      const STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+      // Also treat the job as fresh if the edge function held the lock recently
+      // (i.e., it was actively processing within the last 5 minutes).
+      const lockedAt = data.filters?._locked_at
+        ? new Date(data.filters._locked_at)
+        : null;
+      const lockAgeMs = lockedAt ? Date.now() - lockedAt.getTime() : Infinity;
+      const isActiveLocked = lockAgeMs < 5 * 60 * 1000; // locked within last 5 min
+      const isFresh = ageMs < STALE_MS || isActiveLocked;
 
       // Always load credits spent from the ledger regardless of whether the job is
       // fresh or stale — used both for the running counter and the completed banner.
@@ -144,7 +159,7 @@ export default function Scrape() {
         : 0;
       setLiveCreditsUsed(creditsSpent);
 
-      if (ageMs < STALE_MS) {
+      if (isFresh) {
         // Hydrate UI with the job's current data regardless of resume path.
         setActiveJobId(data.id);
         setActiveJob(data);
@@ -662,6 +677,11 @@ export default function Scrape() {
   };
 
   const handleReset = () => {
+    // Remember this job was explicitly dismissed so checkActive doesn't re-show
+    // it the next time the user navigates back to this page.
+    if (activeJobId) {
+      sessionStorage.setItem("dismissed_job_id", activeJobId);
+    }
     setState("input");
     setVideoUrl('');
     setVideoId(null);
