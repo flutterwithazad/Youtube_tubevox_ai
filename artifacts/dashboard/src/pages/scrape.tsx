@@ -56,6 +56,16 @@ export default function Scrape() {
   // starting a fresh scrape. Polling uses this to know it owns the job watch.
   const reconnectedRef = useRef(false);
 
+  // Populated before calling runScrapeJob() from checkActive so the loop can
+  // resume from the exact page token saved by the edge function.
+  const resumeOptsRef = useRef<{
+    jobId: string;
+    pageToken: string | null;
+    maxComments: number | null;
+    videoUrl: string;
+    initialCommentCount: number;
+  } | null>(null);
+
   // On load: check for an existing active/stuck job
   useEffect(() => {
     if (!user) return;
@@ -81,15 +91,42 @@ export default function Scrape() {
       const STALE_MS = 10 * 60 * 1000; // 10 minutes
 
       if (ageMs < STALE_MS) {
-        // Recent job — reconnect the UI to it and let the polling effect watch it.
-        reconnectedRef.current = true;
+        // Hydrate UI with the job's current data regardless of resume path.
         setActiveJobId(data.id);
         setActiveJob(data);
         setLiveCommentCount(comments);
         if (data.video_url) setVideoUrl(data.video_url);
-        setIsRunning(true);
-        setState("running");
-        toast.info("Reconnected to your running scrape.", { duration: 4000 });
+
+        // Check if the edge function saved a resume token. When it did we can
+        // restart the frontend loop from exactly where it left off rather than
+        // just polling and waiting for a timeout.
+        const resumeToken: string | null = data.filters?._resume_token ?? null;
+
+        if (resumeToken) {
+          // Resume token present — restart the fetch loop from this token.
+          abortRef.current = false;
+          reconnectedRef.current = false;
+          setIsRunning(true);
+          setState("running");
+          resumeOptsRef.current = {
+            jobId:               data.id,
+            pageToken:           resumeToken,
+            maxComments:         data.requested_comments ?? null,
+            videoUrl:            data.video_url ?? '',
+            initialCommentCount: comments,
+          };
+          toast.info("Resuming your interrupted scrape...", { duration: 4000 });
+          // Defer one tick so React flushes the state updates before the async loop starts.
+          setTimeout(() => runScrapeJob(), 0);
+        } else {
+          // No resume token yet — the edge function is still on its first
+          // invocation (or hasn't returned a page boundary yet).
+          // Fall back to polling: wait for the DB status to go terminal.
+          reconnectedRef.current = true;
+          setIsRunning(true);
+          setState("running");
+          toast.info("Reconnected to your running scrape.", { duration: 4000 });
+        }
         return;
       }
 
@@ -282,6 +319,12 @@ export default function Scrape() {
   const runScrapeJob = async () => {
     if (!user) return;
 
+    // Consume resume opts (set by checkActive when rehydrating after a page refresh).
+    // When present, the loop continues an existing job from a saved page token.
+    // When absent, this is a fresh scrape driven by the chip/URL state.
+    const resumeOpts = resumeOptsRef.current;
+    resumeOptsRef.current = null;
+
     // Get a fresh session — also used for the pre-flight balance check below.
     // NOTE: getSession() auto-refreshes the token if it is close to expiry.
     const { data: { session: initialSession } } = await supabase.auth.getSession();
@@ -308,16 +351,22 @@ export default function Scrape() {
       // If balance check fails, let the scrape proceed — the edge function will catch it
     }
 
-    const finalMaxComments: number | null = (() => {
+    // For a resume, use the job's stored maxComments; for a fresh scrape, derive from chips.
+    const finalMaxComments: number | null = resumeOpts?.maxComments ?? (() => {
       if (selectedChip === 'all') return null;
       if (selectedChip === 'custom') return parseInt(customAmount);
       return selectedChip;
     })();
 
-    let jobId: string | null = null;
-    let pageToken: string | null = null;
-    let totalComments = 0;
-    let prevTotalComments = 0;
+    // The video URL to pass to the edge function. For resumes, use the URL
+    // stored in the job row (the state variable may not be hydrated yet because
+    // React state updates are async).
+    const effectiveVideoUrl = resumeOpts?.videoUrl ?? videoUrl;
+
+    let jobId: string | null = resumeOpts?.jobId ?? null;
+    let pageToken: string | null = resumeOpts?.pageToken ?? null;
+    let totalComments = resumeOpts?.initialCommentCount ?? 0;
+    let prevTotalComments = totalComments;
     let totalCreditsUsed = 0;
     let invocationCount = 0;
     const MAX_INVOCATIONS = 100;
@@ -339,7 +388,7 @@ export default function Scrape() {
       }
 
       const body: Record<string, unknown> = {
-        videoUrl,
+        videoUrl: effectiveVideoUrl,
         maxComments: finalMaxComments,
         filters: {},
       };

@@ -302,9 +302,14 @@ serve(async (req) => {
         // Return done:false so the frontend chains another invocation.
         console.log(`[JOB:${job.id.slice(0,8)}] Safe timeout reached — returning resume token`);
         const totalSoFar = alreadyFetched + totalInserted;
+        // Save the best available resume token so the frontend can continue
+        // after a page refresh. On timeout we fall back to startPageToken
+        // (the token this invocation started with) since nextPageToken is
+        // not available yet — the frontend will re-fetch at most one page.
         await supabase.from("jobs").update({
           status:              "running",
           downloaded_comments: totalSoFar,
+          filters: { ...(job.filters ?? {}), _resume_token: startPageToken ?? null },
         }).eq("id", job.id);
 
         return json({
@@ -359,6 +364,7 @@ serve(async (req) => {
         downloaded_comments: totalAcrossAllInvocations,
         completed_at:        new Date().toISOString(),
         error_message:       "Partial results — credits exhausted before all comments were fetched",
+        filters:             { ...(job.filters ?? {}), _resume_token: null },
       }).eq("id", job.id);
 
       return json({
@@ -378,16 +384,19 @@ serve(async (req) => {
 
     if (!isCancelled) {
       if (done) {
-        // All comments fetched — mark completed with the full accumulated count
+        // All comments fetched — mark completed, clear resume token
         await supabase.from("jobs").update({
           status:              "completed",
           downloaded_comments: totalAcrossAllInvocations,
           completed_at:        new Date().toISOString(),
+          filters:             { ...(job.filters ?? {}), _resume_token: null },
         }).eq("id", job.id);
       } else {
-        // More pages remain — keep status "running", update accumulated progress
+        // More pages remain — save resume token so the frontend can continue
+        // after a page refresh without losing its place in the comment stream.
         await supabase.from("jobs").update({
           downloaded_comments: totalAcrossAllInvocations,
+          filters:             { ...(job.filters ?? {}), _resume_token: nextPageToken },
         }).eq("id", job.id);
       }
     } else {
@@ -395,6 +404,7 @@ serve(async (req) => {
         downloaded_comments: totalAcrossAllInvocations,
         completed_at:        new Date().toISOString(),
         status:              "cancelled",
+        filters:             { ...(job.filters ?? {}), _resume_token: null },
       }).eq("id", job.id);
     }
 

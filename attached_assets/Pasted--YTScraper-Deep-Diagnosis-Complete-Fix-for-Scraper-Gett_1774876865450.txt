@@ -1,0 +1,859 @@
+# YTScraper — Deep Diagnosis & Complete Fix for Scraper Getting Stuck
+# Paste this entire prompt into Replit Agent
+#
+# PROBLEM: Scraper sometimes gets stuck at middle or end
+# This prompt: tests every layer, diagnoses exact cause, applies all fixes
+# DO NOT skip diagnostic steps — run them in order
+
+---
+
+## ARCHITECTURE OVERVIEW (so you understand what to fix)
+
+The scraper has 3 layers that can all fail independently:
+
+1. SUPABASE EDGE FUNCTION (fetch-comments) — Deno runtime, 150s timeout
+   Called repeatedly by the frontend in a loop until done=true
+
+2. FRONTEND LOOP (Next.js) — chains edge function calls in browser memory
+   Dies if tab is closed, JWT expires, or any single call throws
+
+3. DATABASE (Supabase Postgres) — jobs table, comments, credit_ledger
+   Jobs can get stuck in 'running' with no recovery mechanism
+
+---
+
+## PHASE 1 — DIAGNOSTICS (run ALL of these first)
+
+---
+
+### DIAGNOSTIC 1: Find all stuck/problematic jobs in the database
+
+Run in Supabase SQL Editor:
+
+```sql
+-- Overview of all job states
+SELECT
+  status,
+  COUNT(*)                                              AS count,
+  AVG(downloaded_comments)                              AS avg_comments,
+  AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) AS avg_seconds,
+  MAX(EXTRACT(EPOCH FROM (NOW() - started_at)))         AS oldest_running_seconds
+FROM public.jobs
+GROUP BY status
+ORDER BY count DESC;
+```
+
+```sql
+-- Jobs stuck in 'running' (should have completed)
+SELECT
+  id,
+  user_id,
+  status,
+  downloaded_comments,
+  requested_comments,
+  credits_reserved,
+  error_message,
+  started_at,
+  ROUND(EXTRACT(EPOCH FROM (NOW() - started_at))) AS running_for_seconds,
+  next_page_token IS NOT NULL                      AS has_resume_token
+FROM public.jobs
+WHERE status = 'running'
+ORDER BY started_at ASC;
+```
+
+```sql
+-- Jobs that stopped early (completed with < 80% of requested comments)
+SELECT
+  id,
+  status,
+  requested_comments,
+  downloaded_comments,
+  ROUND(downloaded_comments::NUMERIC / NULLIF(requested_comments,0) * 100, 1) AS pct_done,
+  credits_used,
+  credits_reserved,
+  error_message,
+  ROUND(EXTRACT(EPOCH FROM (completed_at - started_at))) AS ran_seconds,
+  created_at
+FROM public.jobs
+WHERE status IN ('cancelled','failed','completed')
+  AND requested_comments IS NOT NULL
+  AND downloaded_comments < (requested_comments * 0.8)
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+```sql
+-- Check if atomic_credit_deduct function exists
+SELECT routine_name, routine_type, security_type
+FROM information_schema.routines
+WHERE routine_schema = 'public'
+  AND routine_name = 'atomic_credit_deduct';
+-- If 0 rows returned: CRITICAL — this function is missing
+```
+
+```sql
+-- Check for orphaned credit reservations (reserved but never settled)
+SELECT
+  j.id          AS job_id,
+  j.status,
+  j.downloaded_comments,
+  j.credits_reserved,
+  j.credits_used,
+  COALESCE(SUM(CASE WHEN cl.amount < 0 THEN ABS(cl.amount) ELSE 0 END), 0) AS total_debited,
+  COALESCE(SUM(CASE WHEN cl.amount > 0 AND cl.source_id = j.id THEN cl.amount ELSE 0 END), 0) AS total_refunded,
+  j.created_at
+FROM public.jobs j
+LEFT JOIN public.credit_ledger cl ON cl.source_id = j.id
+WHERE j.status IN ('cancelled', 'failed', 'running')
+GROUP BY j.id, j.status, j.downloaded_comments, j.credits_reserved, j.credits_used, j.created_at
+HAVING COALESCE(SUM(CASE WHEN cl.amount < 0 THEN ABS(cl.amount) ELSE 0 END), 0) > 0
+ORDER BY j.created_at DESC
+LIMIT 20;
+```
+
+---
+
+### DIAGNOSTIC 2: Test the edge function directly
+
+Use the Supabase Edge Functions log viewer OR test with curl.
+
+First, get a valid user JWT from your browser:
+- Open your app → F12 → Application → Local Storage → supabase.auth.token
+- Copy the access_token value
+
+Then test the edge function with a small video:
+
+```bash
+curl -X POST \
+  'https://jxceenqmcyclbxaxvxto.supabase.co/functions/v1/fetch-comments' \
+  -H 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+  -H 'apikey: YOUR_ANON_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "videoUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "maxComments": 100,
+    "filters": {}
+  }'
+```
+
+Expected response:
+```json
+{
+  "success": true,
+  "done": true,
+  "job_id": "...",
+  "comment_count": 100,
+  "credits_used": 100
+}
+```
+
+If you get an error — that is the root cause. Fix it before anything else.
+
+---
+
+### DIAGNOSTIC 3: Check edge function logs for stuck jobs
+
+Go to: Supabase Dashboard → Edge Functions → fetch-comments → Logs
+
+Look for:
+- Any invocation that ran for > 140,000ms (timeout at 150s)
+- Any ERROR level logs
+- Invocations that start but have no completion log
+- The specific job IDs that got stuck
+
+---
+
+### DIAGNOSTIC 4: Check frontend fetch loop
+
+Open your scrape page → F12 → Console → Start a large scrape.
+
+You should see logs like:
+```
+[LOOP] Invocation 1 starting...
+[LOOP] Result: done=false, count=200, nextPageToken=xxx
+[LOOP] Invocation 2 starting...
+...
+[LOOP] done=true, total=3339
+```
+
+If logs stop mid-way without an error → silent fetch() failure
+If logs stop with "401 Unauthorized" → JWT expired
+If logs stop with "insufficient_credits" → balance state issue
+If logs never appear → frontend loop not calling the function at all
+
+---
+
+## PHASE 2 — FIXES (apply ALL of these)
+
+---
+
+### FIX 1 — Create atomic_credit_deduct if missing (CRITICAL)
+
+Run in Supabase SQL Editor first:
+
+```sql
+-- Check if it exists
+SELECT COUNT(*) FROM information_schema.routines
+WHERE routine_schema = 'public' AND routine_name = 'atomic_credit_deduct';
+```
+
+If result is 0, create it:
+
+```sql
+CREATE OR REPLACE FUNCTION public.atomic_credit_deduct(
+  p_user_id     UUID,
+  p_batch_size  INT,
+  p_source_id   UUID,
+  p_description TEXT
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_balance     BIGINT;
+  v_new_balance BIGINT;
+BEGIN
+  -- Per-user advisory lock prevents concurrent double-spending
+  PERFORM pg_advisory_xact_lock(hashtext(p_user_id::TEXT));
+
+  -- Get real-time balance from ledger
+  SELECT COALESCE(SUM(amount), 0)
+  INTO v_balance
+  FROM public.credit_ledger
+  WHERE user_id = p_user_id;
+
+  -- Insufficient credits
+  IF v_balance < p_batch_size THEN
+    RETURN json_build_object(
+      'ok',      false,
+      'balance', v_balance,
+      'needed',  p_batch_size
+    );
+  END IF;
+
+  -- Deduct
+  v_new_balance := v_balance - p_batch_size;
+
+  INSERT INTO public.credit_ledger (
+    user_id, amount, source_type, source_id, description, balance_after
+  ) VALUES (
+    p_user_id,
+    -p_batch_size,
+    'job_reserve',
+    p_source_id,
+    p_description,
+    v_new_balance
+  );
+
+  RETURN json_build_object(
+    'ok',       true,
+    'balance',  v_new_balance,
+    'deducted', p_batch_size
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.atomic_credit_deduct(UUID, INT, UUID, TEXT)
+  TO authenticated, service_role;
+```
+
+---
+
+### FIX 2 — Edge function: reduce invocation limit & add safe timeout
+
+In `supabase/functions/fetch-comments/index.ts`:
+
+```typescript
+// CHANGE THIS:
+const PER_INVOCATION_LIMIT = 500; // or 2000
+
+// TO THIS — safe for 150s Supabase timeout with reply fetching:
+const PER_INVOCATION_LIMIT = 150;
+// 150 comments per invocation = ~20-40 seconds
+// Frontend chains calls automatically — no data loss
+// More calls but each one completes safely within timeout
+```
+
+Also add a safety self-timeout inside the edge function so it
+exits cleanly before Deno hard-kills it:
+
+```typescript
+// Add near the top of serve(), after parsing the body and loading the job:
+const INVOCATION_START = Date.now()
+const SAFE_EXIT_MS = 100_000 // 100 seconds — exit cleanly before 150s kill
+
+// Add this check inside the onBatch callback, at the very top:
+const onBatch = async (batch: any[], _totalSoFar: number): Promise<boolean> => {
+
+  // SAFETY EXIT: if we're approaching timeout, stop cleanly and let frontend resume
+  const elapsed = Date.now() - INVOCATION_START
+  if (elapsed > SAFE_EXIT_MS) {
+    console.log(`[TIMEOUT_GUARD] ${elapsed}ms elapsed — stopping early for safe resume`)
+    return false // causes fetchAllComments to return current nextPageToken
+  }
+
+  // ... rest of onBatch
+}
+```
+
+---
+
+### FIX 3 — Edge function: fix cancellation check to use job.id specifically
+
+Find the cancellation check inside `onBatch`. It MUST use `job.id`:
+
+```typescript
+// WRONG — reads ANY job for this user, including old cancelled ones:
+const { data: jobCheck } = await supabase
+  .from('jobs')
+  .select('status')
+  .eq('user_id', user.id)   // ← BUG: reads wrong job
+  .single()
+
+// CORRECT — only checks THIS specific job:
+const { data: jobCheck } = await supabaseAdmin
+  .from('jobs')
+  .select('status')
+  .eq('id', job.id)          // ← always use job.id
+  .single()
+
+if (jobCheck?.status === 'cancelled') {
+  isCancelled = true
+  return false
+}
+// Do NOT check for any other status here — only 'cancelled' should stop
+```
+
+---
+
+### FIX 4 — Edge function: add retry logic for YouTube API transient errors
+
+In `youtubeApi.ts`, the `ytGet` method already rotates keys on quota errors.
+Add retry logic for transient network errors and 5xx errors:
+
+```typescript
+private async ytGet(baseUrl: string): Promise<YTResponse> {
+  let attempts = 0
+  const MAX_ATTEMPTS = 10
+  const RETRY_DELAYS = [1000, 2000, 4000, 8000] // exponential backoff ms
+
+  while (attempts < MAX_ATTEMPTS) {
+    attempts++
+    try {
+      const k   = await this.key()
+      const url = `${baseUrl}&key=${k.key_value}`
+      const res = await fetch(url)
+      const data: YTResponse = await res.json()
+
+      if (!data.error) {
+        await this.km.markUsed(k.id, 1)
+        return data
+      }
+
+      const { code, message } = data.error
+
+      // Quota exhausted → rotate key
+      if (code === 403 && message.toLowerCase().includes('quota')) {
+        console.log(`[KEY_ROTATE] Key "${k.label}" quota exceeded`)
+        this.activeKey = await this.km.rotateKey(k.id)
+        continue // retry immediately with new key
+      }
+
+      // Comments disabled on this video — unrecoverable
+      if (code === 403) throw new Error('Comments are disabled on this video')
+
+      // Video not found / private — unrecoverable
+      if (code === 404) throw new Error('Video not found or is private')
+
+      // Rate limit (429) → wait then retry
+      if (code === 429 || res.status === 429) {
+        const delay = RETRY_DELAYS[Math.min(attempts - 1, RETRY_DELAYS.length - 1)]
+        console.log(`[RATE_LIMIT] Waiting ${delay}ms before retry ${attempts}`)
+        await new Promise(r => setTimeout(r, delay))
+        continue
+      }
+
+      // 5xx server errors → wait then retry
+      if (code >= 500 || res.status >= 500) {
+        const delay = RETRY_DELAYS[Math.min(attempts - 1, RETRY_DELAYS.length - 1)]
+        console.log(`[SERVER_ERROR] HTTP ${code} — retrying in ${delay}ms`)
+        await new Promise(r => setTimeout(r, delay))
+        continue
+      }
+
+      // Any other error — mark key and throw
+      await this.km.markError(k.id)
+      throw new Error(message)
+
+    } catch (err: any) {
+      // Network errors (fetch failed) → retry with backoff
+      if (err.message?.includes('fetch') || err.name === 'TypeError') {
+        const delay = RETRY_DELAYS[Math.min(attempts - 1, RETRY_DELAYS.length - 1)]
+        console.log(`[NETWORK_ERROR] ${err.message} — retrying in ${delay}ms`)
+        await new Promise(r => setTimeout(r, delay))
+        continue
+      }
+      throw err // unrecoverable error
+    }
+  }
+
+  throw new Error('Max retry attempts reached — YouTube API unavailable')
+}
+```
+
+---
+
+### FIX 5 — Edge function: always save next_page_token to DB
+
+After every page, save the current page token to the job row.
+This allows the frontend to resume if the function is interrupted:
+
+```typescript
+// Inside onBatch, after the credit deduction succeeds, add:
+await supabaseAdmin
+  .from('jobs')
+  .update({
+    downloaded_comments: alreadyFetched + totalInserted,
+    status: 'running',
+    // Save the CURRENT page token so we can resume if this invocation dies
+    // This is updated AFTER each page, not before
+  })
+  .eq('id', job.id)
+```
+
+Also ensure the final return from `fetchAllComments` includes the page token,
+and that the edge function response always returns `nextPageToken` correctly:
+
+```typescript
+// In the final return of the edge function:
+return json({
+  success:       true,
+  done:          nextPageToken === null && !isCancelled,
+  nextPageToken: nextPageToken,   // MUST be returned so frontend can chain
+  job_id:        job.id,
+  video_title:   video.title,
+  channel_name:  video.channelName,
+  thumbnail:     video.thumbnail,
+  comment_count: totalAcrossAllInvocations,
+  credits_used:  creditsUsed,
+  balance_after: balance - creditsUsed,
+  cancelled:     isCancelled,
+})
+```
+
+---
+
+### FIX 6 — Frontend: refresh JWT token on every loop iteration
+
+Find the `runScrapeJob` function (or wherever the fetch loop is).
+Get a fresh session token on EVERY invocation, not just once at start:
+
+```typescript
+// WRONG — token captured once, expires after 1 hour:
+const { data: { session } } = await supabase.auth.getSession()
+const token = session!.access_token  // cached — stale after 1 hour
+
+while (!done) {
+  const response = await fetch(edgeFunctionUrl, {
+    headers: { 'Authorization': `Bearer ${token}` }  // may be expired!
+  })
+}
+
+// CORRECT — fresh token every single invocation:
+while (!done) {
+  // Refresh session (Supabase client auto-refreshes if needed)
+  const { data: { session }, error: sessionErr } = await supabase.auth.getSession()
+
+  if (sessionErr || !session) {
+    console.error('[AUTH] Session expired or invalid — stopping loop')
+    onError('Your session expired. Please refresh the page and try again.')
+    return
+  }
+
+  console.log(`[LOOP] Invocation ${invocationCount + 1} — token expires: ${
+    new Date(session.expires_at! * 1000).toISOString()
+  }`)
+
+  const response = await fetch(
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/fetch-comments`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${session.access_token}`,  // always fresh
+        'apikey':        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      },
+      body: JSON.stringify(body),
+    }
+  )
+  // ...
+}
+```
+
+---
+
+### FIX 7 — Frontend: add retry with backoff for failed invocations
+
+Don't let a single network error kill the entire scrape.
+Add retry logic in the fetch loop:
+
+```typescript
+const callEdgeFunction = async (body: object, retries = 3): Promise<any> => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/fetch-comments`,
+        {
+          method:  'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey':        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(165_000), // 165s — slightly over edge fn limit
+        }
+      )
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`HTTP ${response.status}: ${errorText}`)
+      }
+
+      return await response.json()
+
+    } catch (err: any) {
+      const isLastAttempt = attempt === retries
+      const isTimeout = err.name === 'TimeoutError' || err.name === 'AbortError'
+      const isNetwork = err.message?.includes('fetch') || err.name === 'TypeError'
+
+      if (!isLastAttempt && (isTimeout || isNetwork)) {
+        const delay = attempt * 2000 // 2s, 4s, 6s
+        console.warn(`[RETRY] Attempt ${attempt} failed: ${err.message} — retrying in ${delay}ms`)
+        await new Promise(r => setTimeout(r, delay))
+        continue
+      }
+
+      throw err // give up after max retries
+    }
+  }
+}
+```
+
+---
+
+### FIX 8 — Frontend: resume interrupted jobs on page load
+
+When the scrape page loads, check if there's a job stuck in 'running'
+with a `next_page_token`. If yes — offer to resume it:
+
+```typescript
+// On scrape page mount:
+useEffect(() => {
+  const checkForResumableJob = async () => {
+    const { data: stuckJob } = await supabase
+      .from('jobs')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('status', 'running')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .single()
+
+    if (!stuckJob) return
+
+    const runningForMinutes = (Date.now() - new Date(stuckJob.started_at).getTime()) / 60000
+
+    if (runningForMinutes > 3) {
+      // Job has been 'running' for more than 3 minutes — likely stuck
+      // Offer to resume
+      setResumableJob(stuckJob)
+      setShowResumePrompt(true)
+    } else {
+      // Job started recently — just track it normally
+      setActiveJobId(stuckJob.id)
+      setActiveJob(stuckJob)
+      setScrapeState('running')
+    }
+  }
+
+  if (user?.id) checkForResumableJob()
+}, [user?.id])
+```
+
+Show a resume prompt UI:
+```tsx
+{showResumePrompt && resumableJob && (
+  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+    <p className="text-sm font-semibold text-amber-900">
+      Found an interrupted scrape
+    </p>
+    <p className="text-sm text-amber-700 mt-1">
+      "{resumableJob.video_title}" — {resumableJob.downloaded_comments?.toLocaleString()} comments collected so far
+    </p>
+    <div className="flex gap-3 mt-3">
+      <button
+        onClick={() => resumeJob(resumableJob)}
+        className="text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 px-4 py-2 rounded-lg"
+      >
+        Resume scraping →
+      </button>
+      <button
+        onClick={() => cancelAndDiscard(resumableJob)}
+        className="text-sm text-amber-700 hover:text-amber-900"
+      >
+        Discard and start fresh
+      </button>
+    </div>
+  </div>
+)}
+```
+
+Resume function:
+```typescript
+const resumeJob = async (job: Job) => {
+  setShowResumePrompt(false)
+  setActiveJobId(job.id)
+  setActiveJob(job)
+  setScrapeState('running')
+  setLiveCommentCount(job.downloaded_comments ?? 0)
+
+  // Resume the loop from where it left off
+  await runScrapeJob({
+    videoUrl:    job.video_url,
+    maxComments: job.requested_comments,
+    filters:     job.filters ?? {},
+    resumeJobId: job.id,
+    // pageToken will be fetched from DB inside runScrapeJob
+    onProgress:  handleProgress,
+    onComplete:  handleComplete,
+    onError:     handleError,
+  })
+}
+```
+
+---
+
+### FIX 9 — Database: add watchdog function to auto-recover stuck jobs
+
+Run in Supabase SQL Editor to create a watchdog that marks
+stuck jobs as failed and refunds credits:
+
+```sql
+CREATE OR REPLACE FUNCTION public.recover_stuck_jobs()
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_count INTEGER := 0;
+  v_job   RECORD;
+BEGIN
+  -- Find jobs stuck in 'running' for more than 15 minutes
+  FOR v_job IN
+    SELECT id, user_id, credits_reserved, downloaded_comments
+    FROM public.jobs
+    WHERE status = 'running'
+      AND started_at < NOW() - INTERVAL '15 minutes'
+  LOOP
+    -- Mark as failed
+    UPDATE public.jobs
+    SET
+      status        = 'failed',
+      completed_at  = NOW(),
+      error_message = 'Auto-recovered: job exceeded maximum run time. Credits refunded.'
+    WHERE id = v_job.id;
+
+    -- Refund any unreturned credits
+    IF v_job.credits_reserved > 0 THEN
+      INSERT INTO public.credit_ledger (
+        user_id, amount, source_type, source_id, description
+      ) VALUES (
+        v_job.user_id,
+        v_job.credits_reserved,
+        'job_cancel_refund',
+        v_job.id,
+        'Auto-refund: job timed out after 15 minutes'
+      );
+    END IF;
+
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.recover_stuck_jobs() TO service_role;
+```
+
+Call this function from a Supabase scheduled job (pg_cron) every 5 minutes:
+
+```sql
+-- Enable pg_cron extension first (Supabase → Extensions → pg_cron)
+SELECT cron.schedule(
+  'recover-stuck-jobs',
+  '*/5 * * * *',  -- every 5 minutes
+  'SELECT public.recover_stuck_jobs()'
+);
+```
+
+---
+
+### FIX 10 — Database: fix all currently stuck jobs
+
+Run NOW to fix any jobs currently stuck:
+
+```sql
+-- Preview what will be fixed
+SELECT
+  id,
+  status,
+  downloaded_comments,
+  credits_reserved,
+  error_message,
+  ROUND(EXTRACT(EPOCH FROM (NOW() - started_at)) / 60, 1) AS stuck_minutes
+FROM public.jobs
+WHERE status = 'running'
+  AND started_at < NOW() - INTERVAL '10 minutes'
+ORDER BY started_at ASC;
+```
+
+```sql
+-- Fix them (only run after reviewing the preview above)
+WITH stuck_jobs AS (
+  UPDATE public.jobs
+  SET
+    status        = 'failed',
+    completed_at  = NOW(),
+    error_message = 'Manually recovered: job was stuck in running state'
+  WHERE status = 'running'
+    AND started_at < NOW() - INTERVAL '10 minutes'
+  RETURNING id, user_id, credits_reserved
+)
+INSERT INTO public.credit_ledger (user_id, amount, source_type, source_id, description)
+SELECT
+  user_id,
+  credits_reserved,
+  'job_cancel_refund',
+  id,
+  'Refund: job recovered from stuck state'
+FROM stuck_jobs
+WHERE credits_reserved > 0;
+```
+
+---
+
+## PHASE 3 — ADD COMPREHENSIVE LOGGING
+
+Add these logs so you can diagnose future issues from Supabase logs:
+
+### In the edge function (index.ts):
+
+```typescript
+// At the very start of serve():
+const INVOCATION_ID = crypto.randomUUID().slice(0, 8)
+console.log(`[${INVOCATION_ID}] ========== INVOCATION START ==========`)
+console.log(`[${INVOCATION_ID}] videoUrl=${body?.videoUrl} jobId=${body?.jobId ?? 'new'} pageToken=${body?.pageToken ? 'yes' : 'no'}`)
+
+// In onBatch:
+console.log(`[${INVOCATION_ID}][BATCH] size=${batch.length} elapsed=${Date.now()-INVOCATION_START}ms total=${alreadyFetched+totalInserted}`)
+console.log(`[${INVOCATION_ID}][CREDITS] balance_before=${currentBalance} deducting=${batch.length}`)
+console.log(`[${INVOCATION_ID}][CREDITS] result=${JSON.stringify(deductResult)}`)
+
+// Before final return:
+console.log(`[${INVOCATION_ID}] ========== INVOCATION END ==========`)
+console.log(`[${INVOCATION_ID}] done=${done} total=${totalAcrossAllInvocations} credits=${creditsUsed} elapsed=${Date.now()-INVOCATION_START}ms`)
+```
+
+### In the frontend loop:
+
+```typescript
+console.log(`[SCRAPE_LOOP] ====== Starting invocation ${invocationCount} ======`)
+console.log(`[SCRAPE_LOOP] jobId=${jobId ?? 'new'} pageToken=${pageToken ? pageToken.slice(0,8)+'...' : 'none'}`)
+console.log(`[SCRAPE_LOOP] Result: done=${result.done} count=${result.comment_count} credits=${result.credits_used}`)
+console.log(`[SCRAPE_LOOP] balance_after=${result.balance_after} nextToken=${result.nextPageToken ? 'yes' : 'none'}`)
+```
+
+---
+
+## PHASE 4 — DEPLOY & TEST PROCEDURE
+
+### Step 1: Apply all database fixes
+Run Fix 1 (atomic_credit_deduct) and Fix 9 (watchdog) in Supabase SQL Editor.
+Run Fix 10 to clear any currently stuck jobs.
+
+### Step 2: Update edge function code
+Apply Fix 2 (reduce PER_INVOCATION_LIMIT to 150),
+Fix 3 (cancellation check),
+Fix 4 (retry logic in ytGet),
+Fix 5 (save next_page_token).
+Add Phase 3 logging.
+Deploy: `supabase functions deploy fetch-comments`
+
+### Step 3: Update frontend code
+Apply Fix 6 (refresh JWT per iteration),
+Fix 7 (retry with backoff),
+Fix 8 (resume on page load).
+
+### Step 4: Run these tests in order
+
+**TEST A — Small video (< 500 comments)**
+1. Scrape a video with ~100 comments
+2. Should complete in 1-2 invocations
+3. Verify in Supabase: `SELECT status, downloaded_comments, credits_used FROM jobs ORDER BY created_at DESC LIMIT 1`
+4. ✓ status='completed', credits_used > 0
+
+**TEST B — Medium video (1,000-5,000 comments)**
+1. Scrape a video with ~3,000 comments
+2. Watch browser console — should see 10-20 invocations chaining
+3. ✓ All complete, job shows status='completed'
+
+**TEST C — Large video (10,000+ comments)**
+1. Scrape a video with 10,000+ comments
+2. Watch Supabase edge function logs in real-time
+3. ✓ Each invocation should show elapsed < 100,000ms
+4. ✓ Job should eventually complete (may take 5-10 minutes)
+
+**TEST D — Tab close resilience**
+1. Start scraping a large video
+2. After 30 seconds, close the browser tab
+3. Wait 2 minutes
+4. Reopen the scrape page
+5. ✓ Should show "Found an interrupted scrape — Resume?" prompt
+6. Click Resume → should continue from where it stopped
+
+**TEST E — Duplicate scrape protection**
+1. Start a scrape
+2. While running, try to start another scrape
+3. ✓ Should show "You already have a job running" toast
+
+**TEST F — Credits balance stays correct**
+1. Start a scrape
+2. After completion, check balance in topbar
+3. Start another scrape immediately
+4. ✓ Balance should be correct on second scrape (no stale state)
+
+**TEST G — Edge function logs verification**
+After running TEST B, go to Supabase → Edge Functions → fetch-comments → Logs.
+You should see clean logs for each invocation with INVOCATION START/END markers.
+No invocations should be missing an END marker (would indicate timeout/crash).
+
+---
+
+## SUMMARY: Priority order
+
+1. **CRITICAL** — Fix 1: Create `atomic_credit_deduct` if missing (run SQL now)
+2. **CRITICAL** — Fix 2: Reduce PER_INVOCATION_LIMIT to 150 (prevents timeouts)
+3. **CRITICAL** — Fix 3: Fix cancellation check to use `job.id` (prevents false cancels)
+4. **HIGH** — Fix 6: Refresh JWT per iteration (prevents auth expiry)
+5. **HIGH** — Fix 9+10: Watchdog + recover stuck jobs now (database cleanup)
+6. **MEDIUM** — Fix 4: Retry on transient YouTube errors
+7. **MEDIUM** — Fix 7: Frontend retry with backoff
+8. **MEDIUM** — Fix 8: Resume on page load
+9. **LOW** — Fix 5: Save page token (enables better resume)
+10. **LOW** — Phase 3 logging (for future diagnosis)
