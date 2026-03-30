@@ -55,6 +55,9 @@ export default function Scrape() {
   // Set to true when checkActive reconnects to an in-progress job rather than
   // starting a fresh scrape. Polling uses this to know it owns the job watch.
   const reconnectedRef = useRef(false);
+  // Mirror of reconnectedRef as React state so the polling useEffect re-runs
+  // when we switch to polling mode from inside runScrapeJob mid-loop.
+  const [isReconnected, setIsReconnected] = useState(false);
 
   // Mutex: prevents two concurrent runScrapeJob loops (e.g. double-click,
   // multiple browser tabs, or checkActive firing while a loop is active).
@@ -175,6 +178,7 @@ export default function Scrape() {
           // invocation (or hasn't returned a page boundary yet).
           // Fall back to polling: wait for the DB status to go terminal.
           reconnectedRef.current = true;
+          setIsReconnected(true);
           setIsRunning(true);
           setState("running");
           toast.info("Reconnected to your running scrape.", { duration: 4000 });
@@ -237,6 +241,7 @@ export default function Scrape() {
       if (job.status === "completed" || job.status === "cancelled") {
         clearInterval(interval);
         reconnectedRef.current = false;
+        setIsReconnected(false);
         setIsRunning(false);
         refetchBalance();
 
@@ -270,6 +275,7 @@ export default function Scrape() {
       } else if (job.status === "failed") {
         clearInterval(interval);
         reconnectedRef.current = false;
+        setIsReconnected(false);
         setIsRunning(false);
         setState("failed");
         refetchBalance();
@@ -280,6 +286,7 @@ export default function Scrape() {
         // Show whatever data was collected rather than leaving the user stuck.
         clearInterval(interval);
         reconnectedRef.current = false;
+        setIsReconnected(false);
         setIsRunning(false);
         refetchBalance();
         if (count >= 100) {
@@ -296,7 +303,7 @@ export default function Scrape() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [isRunning, activeJobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isRunning, activeJobId, isReconnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced URL handler
   const handleUrlChange = (value: string) => {
@@ -482,16 +489,23 @@ export default function Scrape() {
 
           if (!response.ok || result.error) {
             if (result.error === "concurrent_invocation") {
-              // Another browser tab is already running this job.
-              // Stop this loop and switch to polling mode — don't show "failed".
-              setIsRunning(false);
-              toast.warning(
-                "This job is already running in another tab. Close the other tab to scrape here.",
-                { duration: 8000 }
-              );
-              setState("input");
-              setActiveJobId(null);
-              setActiveJob(null);
+              // The edge function lock is held by another invocation.
+              // In both cases we drop the fetch loop and fall into polling mode
+              // so the "running" UI stays visible and we detect completion.
+              loopRunningRef.current = false;
+              reconnectedRef.current = true;
+              setIsReconnected(true); // triggers the polling useEffect to (re-)run
+              if (resumeOpts) {
+                toast.info(
+                  "Scrape is already in progress — monitoring for completion.",
+                  { duration: 5000 }
+                );
+              } else {
+                toast.warning(
+                  "This job is being processed. Monitoring progress here...",
+                  { duration: 5000 }
+                );
+              }
               return;
             }
 
