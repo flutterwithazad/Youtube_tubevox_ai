@@ -11,6 +11,7 @@ interface Job {
   video_title?: string;
   channel_name?: string;
   video_url?: string;
+  thumbnail?: string;
   status: string;
   downloaded_comments?: number;
   requested_comments?: number;
@@ -165,14 +166,20 @@ export default function JobsList() {
                 </tr>
               ) : (
                 jobs.map((job) => (
-                  <tr key={job.id} className="hover:bg-secondary/30 transition-colors group">
+                  <tr key={job.id} className="hover:bg-secondary/30 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-8 bg-muted rounded shrink-0 flex items-center justify-center relative overflow-hidden">
-                          <div className="absolute inset-0 bg-gradient-to-tr from-black/40 to-transparent z-10" />
-                          <Play className="w-3 h-3 text-white/80 z-20 absolute" />
+                        <div className="w-16 h-10 bg-muted rounded shrink-0 relative overflow-hidden border border-border">
+                          {job.thumbnail ? (
+                            <img src={job.thumbnail} alt={job.video_title} className="w-full h-full object-cover" />
+                          ) : (
+                            <>
+                              <div className="absolute inset-0 bg-gradient-to-tr from-black/40 to-transparent z-10" />
+                              <Play className="w-3 h-3 text-white/80 z-20 absolute inset-0 m-auto" />
+                            </>
+                          )}
                         </div>
-                        <div className="min-w-0 max-w-[250px]">
+                        <div className="min-w-0 max-w-[220px]">
                           <p className="font-medium text-foreground truncate">{job.video_title || "Untitled Video"}</p>
                           <p className="text-xs text-muted-foreground truncate">{job.channel_name || "—"}</p>
                         </div>
@@ -198,13 +205,13 @@ export default function JobsList() {
                       {formatDistanceToNow(new Date(job.created_at), { addSuffix: true })}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {(job.downloaded_comments ?? 0) >= 100 && (
+                      <div className="flex items-center justify-end gap-2">
+                        {(job.downloaded_comments ?? 0) > 0 && (
                           <Link href={`/jobs/${job.id}`}>
-                            <button className="text-xs font-medium text-primary hover:underline whitespace-nowrap">
-                              View {(job.downloaded_comments ?? 0).toLocaleString()} Comments
+                            <button className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors whitespace-nowrap flex items-center gap-1">
+                              View &amp; Download
                               {job.status !== "completed" && (
-                                <span className="ml-1 text-amber-600">(partial)</span>
+                                <span className="ml-1 text-amber-600 font-normal">(partial)</span>
                               )}
                             </button>
                           </Link>

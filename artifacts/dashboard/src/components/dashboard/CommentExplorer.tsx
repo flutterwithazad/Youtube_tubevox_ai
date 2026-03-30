@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Search, ArrowUpDown, SlidersHorizontal, Download,
-  Maximize2, Minimize2, CornerDownRight, ChevronDown,
+  Maximize2, Minimize2, CornerDownRight,
   Columns3, Check, Plus, Trash2, Lock, X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -26,7 +26,6 @@ interface FilterRule {
   value: string;
 }
 
-const PAGE_SIZE = 50;
 type SortOrder = "likes" | "newest" | "oldest";
 type PanelName = "sort" | "filter" | "fields" | "export" | null;
 
@@ -48,9 +47,6 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
   // ── DB state ─────────────────────────────────────────────────────────────────
   const [comments,     setComments]     = useState<any[]>([]);
   const [loading,      setLoading]      = useState(true);
-  const [loadingMore,  setLoadingMore]  = useState(false);
-  const [hasMore,      setHasMore]      = useState(true);
-  const [offset,       setOffset]       = useState(0);
 
   // ── UI state ─────────────────────────────────────────────────────────────────
   const [isFullscreen,  setIsFullscreen]  = useState(false);
@@ -178,43 +174,36 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
     visibleFields.authorChannel ? "150px" : null,
   ].filter(Boolean).join(" "), [visibleFields]);
 
-  // ── DB loading ────────────────────────────────────────────────────────────────
-  useEffect(() => { if (jobId) loadInitial(); }, [jobId, sortOrder]);
+  // ── DB loading — fetch ALL comments in batches ────────────────────────────────
+  useEffect(() => { if (jobId) loadAll(); }, [jobId, sortOrder]);
 
-  const buildQuery = (from: number, to: number) => {
-    const q = supabase.from("comments").select("*").eq("job_id", jobId);
-    if (sortOrder === "likes")  return q.order("likes",        { ascending: false }).range(from, to);
-    if (sortOrder === "newest") return q.order("published_at", { ascending: false }).range(from, to);
-    return                             q.order("published_at", { ascending: true  }).range(from, to);
-  };
-
-  const loadInitial = async () => {
+  const loadAll = async () => {
     try {
       setLoading(true);
       setComments([]);
-      setOffset(0);
-      setHasMore(true);
-      const { data, error } = await buildQuery(0, PAGE_SIZE - 1);
-      if (error) throw error;
-      setComments(data ?? []);
-      setHasMore((data?.length ?? 0) === PAGE_SIZE);
-      setOffset(PAGE_SIZE);
+      const all: any[] = [];
+      let from = 0;
+      const BATCH = 1000;
+      while (true) {
+        const q = supabase.from("comments").select("*").eq("job_id", jobId);
+        const ordered =
+          sortOrder === "likes"  ? q.order("likes",        { ascending: false }) :
+          sortOrder === "newest" ? q.order("published_at", { ascending: false }) :
+                                   q.order("published_at", { ascending: true  });
+        const { data, error } = await ordered.range(from, from + BATCH - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < BATCH) break;
+        from += BATCH;
+      }
+      setComments(all);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
   };
-
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
-    const { data } = await buildQuery(offset, offset + PAGE_SIZE - 1);
-    setComments(prev => [...prev, ...(data ?? [])]);
-    setHasMore((data?.length ?? 0) === PAGE_SIZE);
-    setOffset(prev => prev + PAGE_SIZE);
-    setLoadingMore(false);
-  }, [offset, loadingMore, hasMore, sortOrder, jobId]);
 
   const toggleExpand = (id: string) => {
     const s = new Set(expandedRows);
@@ -767,31 +756,6 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
               );
             })}
 
-            {/* Load More */}
-            {!searchQuery && activeFilterCount === 0 && hasMore && (
-              <div className="py-4 text-center">
-                <button
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                  className="flex items-center gap-2 mx-auto text-sm font-medium text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
-                >
-                  {loadingMore
-                    ? <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                    : <ChevronDown className="w-4 h-4" />}
-                  {loadingMore ? "Loading…" : "Load more comments"}
-                </button>
-              </div>
-            )}
-            {(searchQuery || activeFilterCount > 0) && hasMore && (
-              <div className="py-3 text-center">
-                <p className="text-xs text-muted-foreground">
-                  Filters applied to {comments.length.toLocaleString()} loaded comments.{" "}
-                  <button onClick={loadMore} disabled={loadingMore} className="text-primary underline underline-offset-1 hover:text-primary/80 disabled:opacity-40">
-                    {loadingMore ? "Loading…" : "Load more →"}
-                  </button>
-                </p>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -799,17 +763,23 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
       {/* ── Footer ───────────────────────────────────────────────────────────── */}
       {!loading && (
         <div className="p-3 border-t border-border bg-secondary/30 text-xs text-center text-muted-foreground shrink-0">
-          Showing{" "}
-          <strong className="text-foreground">{displayedComments.length.toLocaleString()}</strong>
-          {" "}of{" "}
-          <strong className="text-foreground">{totalCount.toLocaleString()}</strong>
-          {" "}comments
-          {activeFilterCount > 0 && (
-            <span className="ml-1 text-red-600 font-medium">
-              ({activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""} active ·{" "}
-              <button onClick={clearAll} className="underline underline-offset-1 hover:text-red-700">clear</button>)
-            </span>
-          )}
+          {activeFilterCount > 0
+            ? <>
+                <strong className="text-foreground">{displayedComments.length.toLocaleString()}</strong>
+                {" "}matching of{" "}
+                <strong className="text-foreground">{comments.length.toLocaleString()}</strong>
+                {" "}comments
+                <span className="ml-1 text-red-600 font-medium">
+                  ({activeFilterCount} filter{activeFilterCount !== 1 ? "s" : ""} active ·{" "}
+                  <button onClick={clearAll} className="underline underline-offset-1 hover:text-red-700">clear</button>)
+                </span>
+              </>
+            : <>
+                All{" "}
+                <strong className="text-foreground">{comments.length.toLocaleString()}</strong>
+                {" "}comments loaded
+              </>
+          }
         </div>
       )}
     </div>
