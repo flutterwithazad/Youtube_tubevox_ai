@@ -218,59 +218,57 @@ serve(async (req) => {
         return false;
       }
 
-      // Optimistically bump the counter so polling sees progress immediately.
-      // alreadyFetched is the base from previous invocations — must be added
-      // so the counter never resets to 0 on invocation 2+.
-      const optimisticTotal = alreadyFetched + totalInserted + batch.length;
-      await supabase
-        .from("jobs")
-        .update({ downloaded_comments: optimisticTotal })
-        .eq("id", job.id);
-
-      // Insert comments into DB (chunked to stay within PostgREST limits)
+      // Insert comments into DB (chunked to stay within PostgREST limits).
+      // Track batchInserted separately — credits are only deducted for rows
+      // that were actually stored. If a concurrent invocation already inserted
+      // the same page (duplicate comment_id), the insert will error and we skip
+      // the credit deduction for that chunk entirely — no wasted credits.
       const CHUNK = 500;
+      let batchInserted = 0;
       for (let i = 0; i < batch.length; i += CHUNK) {
         const chunk = batch.slice(i, i + CHUNK);
         const { error: insertErr } = await supabase.from("comments").insert(chunk);
         if (!insertErr) {
+          batchInserted += chunk.length;
           totalInserted += chunk.length;
         } else {
           console.error(`Insert error (chunk ${i / CHUNK}):`, insertErr.message);
         }
       }
 
-      // Atomically check balance and deduct credits via DB function.
-      // Uses a per-user advisory lock — safe even with multiple concurrent sessions.
-      // INSERTs a new negative row instead of updating a pre-created entry,
-      // so there is no risk of a null target-row ID silently being a no-op.
-      const { data: deductResult, error: rpcErr } = await supabase.rpc(
-        "atomic_credit_deduct",
-        {
-          p_user_id:     user.id,
-          p_batch_size:  batch.length,
-          p_source_id:   job.id,
-          p_description: `Batch: ${alreadyFetched + totalInserted} comments fetched — 1 credit per comment`,
-        }
-      );
-
-      if (rpcErr) {
-        console.error("atomic_credit_deduct RPC error:", rpcErr.message);
-        return false; // stop safely on RPC error
-      }
-
-      if (!deductResult?.ok) {
-        console.log(`Insufficient credits (balance=${deductResult?.balance}) — flagging creditExhausted`);
-        creditExhausted = true;
-        return false;
-      }
-
-      creditsUsed += batch.length;
-
-      // Confirm final downloaded count after inserts (accumulated across all invocations)
+      // Update the live counter after actual inserts.
       await supabase
         .from("jobs")
         .update({ downloaded_comments: alreadyFetched + totalInserted })
         .eq("id", job.id);
+
+      // Only deduct credits for comments that were newly inserted this batch.
+      // batchInserted == 0 when all inserts failed (e.g. duplicate concurrent call)
+      // — in that case we skip the RPC entirely, preserving the user's credits.
+      if (batchInserted > 0) {
+        const { data: deductResult, error: rpcErr } = await supabase.rpc(
+          "atomic_credit_deduct",
+          {
+            p_user_id:     user.id,
+            p_batch_size:  batchInserted,
+            p_source_id:   job.id,
+            p_description: `Batch: ${alreadyFetched + totalInserted} comments fetched — 1 credit per comment`,
+          }
+        );
+
+        if (rpcErr) {
+          console.error("atomic_credit_deduct RPC error:", rpcErr.message);
+          return false; // stop safely on RPC error
+        }
+
+        if (!deductResult?.ok) {
+          console.log(`Insufficient credits (balance=${deductResult?.balance}) — flagging creditExhausted`);
+          creditExhausted = true;
+          return false;
+        }
+
+        creditsUsed += batchInserted;
+      }
 
       return true;
     };

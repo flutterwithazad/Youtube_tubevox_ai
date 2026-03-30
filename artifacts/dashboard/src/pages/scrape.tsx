@@ -56,6 +56,10 @@ export default function Scrape() {
   // starting a fresh scrape. Polling uses this to know it owns the job watch.
   const reconnectedRef = useRef(false);
 
+  // Mutex: prevents two concurrent runScrapeJob loops (e.g. double-click,
+  // multiple browser tabs, or checkActive firing while a loop is active).
+  const loopRunningRef = useRef(false);
+
   // Populated before calling runScrapeJob() from checkActive so the loop can
   // resume from the exact page token saved by the edge function.
   const resumeOptsRef = useRef<{
@@ -319,202 +323,215 @@ export default function Scrape() {
   const runScrapeJob = async () => {
     if (!user) return;
 
-    // Consume resume opts (set by checkActive when rehydrating after a page refresh).
-    // When present, the loop continues an existing job from a saved page token.
-    // When absent, this is a fresh scrape driven by the chip/URL state.
-    const resumeOpts = resumeOptsRef.current;
-    resumeOptsRef.current = null;
-
-    // Get a fresh session — also used for the pre-flight balance check below.
-    // NOTE: getSession() auto-refreshes the token if it is close to expiry.
-    const { data: { session: initialSession } } = await supabase.auth.getSession();
-    if (!initialSession) { toast.error("Not authenticated"); return; }
-
-    // Server-side minimum credit check — enforced even if UI check is bypassed
-    try {
-      const balRes = await fetch('/api/credits/balance', {
-        headers: { Authorization: `Bearer ${initialSession.access_token}` },
-      });
-      const balData = await balRes.json();
-      const serverBalance = balData.balance ?? 0;
-      if (serverBalance < 100) {
-        toast.error(`You need at least 100 credits to start a scrape. Current balance: ${serverBalance.toLocaleString()}.`, {
-          duration: 6000,
-          action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
-        });
-        setState("input");
-        setIsRunning(false);
-        refetchBalance();
-        return;
-      }
-    } catch {
-      // If balance check fails, let the scrape proceed — the edge function will catch it
+    // Mutex guard — prevent two concurrent loops (double-click, multiple tabs,
+    // or checkActive firing while a loop is already active).
+    if (loopRunningRef.current) {
+      console.warn("runScrapeJob: a loop is already running — skipping duplicate call");
+      return;
     }
+    loopRunningRef.current = true;
 
-    // For a resume, use the job's stored maxComments; for a fresh scrape, derive from chips.
-    const finalMaxComments: number | null = resumeOpts?.maxComments ?? (() => {
-      if (selectedChip === 'all') return null;
-      if (selectedChip === 'custom') return parseInt(customAmount);
-      return selectedChip;
-    })();
+    try {
+      // Consume resume opts (set by checkActive when rehydrating after a page refresh).
+      // When present, the loop continues an existing job from a saved page token.
+      // When absent, this is a fresh scrape driven by the chip/URL state.
+      const resumeOpts = resumeOptsRef.current;
+      resumeOptsRef.current = null;
 
-    // The video URL to pass to the edge function. For resumes, use the URL
-    // stored in the job row (the state variable may not be hydrated yet because
-    // React state updates are async).
-    const effectiveVideoUrl = resumeOpts?.videoUrl ?? videoUrl;
+      // Get a fresh session — also used for the pre-flight balance check below.
+      // NOTE: getSession() auto-refreshes the token if it is close to expiry.
+      const { data: { session: initialSession } } = await supabase.auth.getSession();
+      if (!initialSession) { toast.error("Not authenticated"); return; }
 
-    let jobId: string | null = resumeOpts?.jobId ?? null;
-    let pageToken: string | null = resumeOpts?.pageToken ?? null;
-    let totalComments = resumeOpts?.initialCommentCount ?? 0;
-    let prevTotalComments = totalComments;
-    let totalCreditsUsed = 0;
-    let invocationCount = 0;
-    const MAX_INVOCATIONS = 100;
-
-    while (invocationCount < MAX_INVOCATIONS) {
-      if (abortRef.current) return;
-      invocationCount++;
-
-      // ── Fresh session per invocation ───────────────────────────────────────
-      // getSession() auto-refreshes the JWT when it is within 60s of expiry.
-      // Capturing it once at the top would cause auth failures on long scrapes
-      // (default JWT lifetime is 1 hour; 100 invocations × 30s = up to 50 min).
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast.error("Your session expired. Please sign in again and retry.");
-        setState("failed");
-        setIsRunning(false);
-        return;
+      // Server-side minimum credit check — enforced even if UI check is bypassed
+      try {
+        const balRes = await fetch('/api/credits/balance', {
+          headers: { Authorization: `Bearer ${initialSession.access_token}` },
+        });
+        const balData = await balRes.json();
+        const serverBalance = balData.balance ?? 0;
+        if (serverBalance < 100) {
+          toast.error(`You need at least 100 credits to start a scrape. Current balance: ${serverBalance.toLocaleString()}.`, {
+            duration: 6000,
+            action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+          });
+          setState("input");
+          setIsRunning(false);
+          refetchBalance();
+          return;
+        }
+      } catch {
+        // If balance check fails, let the scrape proceed — the edge function will catch it
       }
 
-      const body: Record<string, unknown> = {
-        videoUrl: effectiveVideoUrl,
-        maxComments: finalMaxComments,
-        filters: {},
-      };
-      if (jobId) body.jobId = jobId;
-      if (pageToken) body.pageToken = pageToken;
+      // For a resume, use the job's stored maxComments; for a fresh scrape, derive from chips.
+      const finalMaxComments: number | null = resumeOpts?.maxComments ?? (() => {
+        if (selectedChip === 'all') return null;
+        if (selectedChip === 'custom') return parseInt(customAmount);
+        return selectedChip;
+      })();
 
-      let result: any;
-      try {
-        const response = await fetch(`${SUPABASE_URL}/functions/v1/fetch-comments`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-            apikey: SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify(body),
-        });
-        result = await response.json();
+      // The video URL to pass to the edge function. For resumes, use the URL
+      // stored in the job row (the state variable may not be hydrated yet because
+      // React state updates are async).
+      const effectiveVideoUrl = resumeOpts?.videoUrl ?? videoUrl;
 
-        if (!response.ok || result.error) {
-          if (result.error === "insufficient_credits") {
-            // Edge function ran out of credits mid-scrape.
-            // The 402 response always includes job_id and comment_count so we can
-            // show the partial data even if this was the very first invocation.
-            if (result.job_id) jobId = result.job_id;
-            if (typeof result.comment_count === 'number' && result.comment_count > 0) {
-              totalComments = result.comment_count;
-              setLiveCommentCount(totalComments);
-              setActiveJobId(result.job_id);
-            }
-            refetchBalance();
-            setIsRunning(false);
-            if (totalComments >= 100 && jobId) {
-              setIsPartialResult(true);
-              setState("completed");
-              toast.warning(
-                `Ran out of credits at ${totalComments.toLocaleString()} comments. Showing what was collected.`,
-                {
-                  duration: 7000,
-                  action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
-                }
-              );
-            } else {
-              const have = typeof result.balance === 'number' ? result.balance : balance;
-              const need = typeof result.credits_needed === 'number' ? result.credits_needed : (maxComments ?? 0);
-              const shortage = Math.max(0, need - have);
-              toast.error(
-                shortage > 0
-                  ? `You need ${shortage.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
-                  : `Not enough credits. Please buy more to continue.`,
-                {
-                  duration: 7000,
-                  action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
-                }
-              );
-              setState("input");
-            }
-            return;
-          }
-          toast.error(result.message ?? result.error ?? "Scraping failed");
+      let jobId: string | null = resumeOpts?.jobId ?? null;
+      let pageToken: string | null = resumeOpts?.pageToken ?? null;
+      let totalComments = resumeOpts?.initialCommentCount ?? 0;
+      let prevTotalComments = totalComments;
+      let totalCreditsUsed = 0;
+      let invocationCount = 0;
+      const MAX_INVOCATIONS = 100;
+
+      while (invocationCount < MAX_INVOCATIONS) {
+        if (abortRef.current) return;
+        invocationCount++;
+
+        // ── Fresh session per invocation ───────────────────────────────────────
+        // getSession() auto-refreshes the JWT when it is within 60s of expiry.
+        // Capturing it once at the top would cause auth failures on long scrapes
+        // (default JWT lifetime is 1 hour; 100 invocations × 30s = up to 50 min).
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          toast.error("Your session expired. Please sign in again and retry.");
           setState("failed");
           setIsRunning(false);
           return;
         }
-      } catch (err: any) {
-        toast.error("Network error. Please try again.");
-        setState("failed");
-        setIsRunning(false);
-        return;
-      }
 
-      jobId = result.job_id;
-      pageToken = result.nextPageToken;
-      prevTotalComments = totalComments;
-      totalComments = result.comment_count ?? totalComments;
+        const body: Record<string, unknown> = {
+          videoUrl: effectiveVideoUrl,
+          maxComments: finalMaxComments,
+          filters: {},
+        };
+        if (jobId) body.jobId = jobId;
+        if (pageToken) body.pageToken = pageToken;
 
-      // Update UI immediately
-      setActiveJobId(jobId);
-      setLiveCommentCount(totalComments);
-      fetchJobDetails(jobId!);
-      refetchBalance();
+        let result: any;
+        try {
+          const response = await fetch(`${SUPABASE_URL}/functions/v1/fetch-comments`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+              apikey: SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify(body),
+          });
+          result = await response.json();
 
-      // ── IMPORTANT: check done/cancelled BEFORE credit accounting ──
-      // The edge function handles all credit deductions itself. Our job here is
-      // only to track what was downloaded for the live UI counter.
-      // Checking done/cancelled first ensures a completed scrape ALWAYS reaches
-      // the success state — a credit edge-case can never mask a successful result.
-
-      if (result.cancelled) {
-        setIsRunning(false);
-        if (totalComments >= 100 && jobId) {
-          setIsPartialResult(true);
-          setState("completed");
-          toast.warning(
-            `Job cancelled at ${totalComments.toLocaleString()} comments. Showing available data.`,
-            { duration: 6000 }
-          );
-        } else {
-          setState("input");
-          setActiveJobId(null);
-          setActiveJob(null);
-          toast.info("Job cancelled.");
+          if (!response.ok || result.error) {
+            if (result.error === "insufficient_credits") {
+              // Edge function ran out of credits mid-scrape.
+              // The 402 response always includes job_id and comment_count so we can
+              // show the partial data even if this was the very first invocation.
+              if (result.job_id) jobId = result.job_id;
+              if (typeof result.comment_count === 'number' && result.comment_count > 0) {
+                totalComments = result.comment_count;
+                setLiveCommentCount(totalComments);
+                setActiveJobId(result.job_id);
+              }
+              refetchBalance();
+              setIsRunning(false);
+              if (totalComments >= 100 && jobId) {
+                setIsPartialResult(true);
+                setState("completed");
+                toast.warning(
+                  `Ran out of credits at ${totalComments.toLocaleString()} comments. Showing what was collected.`,
+                  {
+                    duration: 7000,
+                    action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+                  }
+                );
+              } else {
+                const have = typeof result.balance === 'number' ? result.balance : balance;
+                const need = typeof result.credits_needed === 'number' ? result.credits_needed : (maxComments ?? 0);
+                const shortage = Math.max(0, need - have);
+                toast.error(
+                  shortage > 0
+                    ? `You need ${shortage.toLocaleString()} more credits to scrape ${need.toLocaleString()} comments. You currently have ${have.toLocaleString()}.`
+                    : `Not enough credits. Please buy more to continue.`,
+                  {
+                    duration: 7000,
+                    action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+                  }
+                );
+                setState("input");
+              }
+              return;
+            }
+            toast.error(result.message ?? result.error ?? "Scraping failed");
+            setState("failed");
+            setIsRunning(false);
+            return;
+          }
+        } catch (err: any) {
+          toast.error("Network error. Please try again.");
+          setState("failed");
+          setIsRunning(false);
+          return;
         }
-        return;
-      }
 
-      if (result.done) {
-        // Scrape fully completed — always show success, no partial banner
-        toast.success(`✓ ${totalComments.toLocaleString()} comments scraped!`);
-        setState("completed");
-        setIsRunning(false);
+        jobId = result.job_id;
+        pageToken = result.nextPageToken;
+        prevTotalComments = totalComments;
+        totalComments = result.comment_count ?? totalComments;
+
+        // Update UI immediately
+        setActiveJobId(jobId);
+        setLiveCommentCount(totalComments);
+        fetchJobDetails(jobId!);
         refetchBalance();
-        return;
+
+        // ── IMPORTANT: check done/cancelled BEFORE credit accounting ──
+        // The edge function handles all credit deductions itself. Our job here is
+        // only to track what was downloaded for the live UI counter.
+        // Checking done/cancelled first ensures a completed scrape ALWAYS reaches
+        // the success state — a credit edge-case can never mask a successful result.
+
+        if (result.cancelled) {
+          setIsRunning(false);
+          if (totalComments >= 100 && jobId) {
+            setIsPartialResult(true);
+            setState("completed");
+            toast.warning(
+              `Job cancelled at ${totalComments.toLocaleString()} comments. Showing available data.`,
+              { duration: 6000 }
+            );
+          } else {
+            setState("input");
+            setActiveJobId(null);
+            setActiveJob(null);
+            toast.info("Job cancelled.");
+          }
+          return;
+        }
+
+        if (result.done) {
+          // Scrape fully completed — always show success, no partial banner
+          toast.success(`✓ ${totalComments.toLocaleString()} comments scraped!`);
+          setState("completed");
+          setIsRunning(false);
+          refetchBalance();
+          return;
+        }
+
+        // Track credits for the live counter (edge fn already deducted server-side)
+        const batchComments = Math.max(0, totalComments - prevTotalComments);
+        totalCreditsUsed += batchComments;
+        setLiveCreditsUsed(totalCreditsUsed);
+
+        await new Promise((r) => setTimeout(r, 500));
       }
 
-      // Track credits for the live counter (edge fn already deducted server-side)
-      const batchComments = Math.max(0, totalComments - prevTotalComments);
-      totalCreditsUsed += batchComments;
-      setLiveCreditsUsed(totalCreditsUsed);
-
-      await new Promise((r) => setTimeout(r, 500));
+      toast.error("Job is very large. Check your Jobs page to monitor progress.");
+      setState("failed");
+      setIsRunning(false);
+    } finally {
+      // Always release the mutex so future calls can start a new loop.
+      loopRunningRef.current = false;
     }
-
-    toast.error("Job is very large. Check your Jobs page to monitor progress.");
-    setState("failed");
-    setIsRunning(false);
   };
 
   const handleSubmit = async () => {
