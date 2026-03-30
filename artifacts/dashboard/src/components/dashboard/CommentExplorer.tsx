@@ -43,6 +43,8 @@ function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
 
+const RENDER_PAGE = 300;
+
 export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobStatus }: CommentExplorerProps) {
   // ── DB state ─────────────────────────────────────────────────────────────────
   const [comments,     setComments]     = useState<any[]>([]);
@@ -56,6 +58,8 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
   const [searchQuery,   setSearchQuery]   = useState("");
   const [openPanel,     setOpenPanel]     = useState<PanelName>(null);
   const [filterTab,     setFilterTab]     = useState<"simple" | "advanced">("simple");
+  // Render window — keeps DOM nodes manageable for large datasets
+  const [renderLimit,  setRenderLimit]   = useState(RENDER_PAGE);
 
   // ── Simple filter state ───────────────────────────────────────────────────────
   const [simpleFilters, setSimpleFilters] = useState({
@@ -174,14 +178,16 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
     visibleFields.authorChannel ? "150px" : null,
   ].filter(Boolean).join(" "), [visibleFields]);
 
-  // ── DB loading — fetch ALL comments in batches ────────────────────────────────
-  useEffect(() => { if (jobId) loadAll(); }, [jobId, sortOrder]);
+  // ── DB loading — fetch ALL comments in batches, deduplicated ─────────────────
+  useEffect(() => { if (jobId) loadAll(); }, [jobId, sortOrder]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAll = async () => {
     try {
       setLoading(true);
       setComments([]);
+      setRenderLimit(RENDER_PAGE);
       const all: any[] = [];
+      const seen = new Set<string>();
       let from = 0;
       const BATCH = 1000;
       while (true) {
@@ -193,7 +199,11 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
         const { data, error } = await ordered.range(from, from + BATCH - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
-        all.push(...data);
+        // Deduplicate by comment_id to avoid React key collisions and filter glitches
+        for (const c of data) {
+          const key = c.comment_id || c.id;
+          if (!seen.has(key)) { seen.add(key); all.push(c); }
+        }
         if (data.length < BATCH) break;
         from += BATCH;
       }
@@ -204,6 +214,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
       setLoading(false);
     }
   };
+
+  // Reset render window when filters change so results always start from top
+  useEffect(() => { setRenderLimit(RENDER_PAGE); }, [searchQuery, simpleFilters, advancedRules]);
 
   const toggleExpand = (id: string) => {
     const s = new Set(expandedRows);
@@ -293,7 +306,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
           <p className="text-xs text-muted-foreground mt-0.5">
             {loading
               ? "Loading…"
-              : `Showing ${displayedComments.length.toLocaleString()} of ${totalCount.toLocaleString()} comments${activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? "s" : ""} active` : ""}`}
+              : displayedComments.length > renderLimit
+                ? `Showing ${renderLimit.toLocaleString()} of ${displayedComments.length.toLocaleString()} filtered · ${totalCount.toLocaleString()} total${activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? "s" : ""} active` : ""}`
+                : `${displayedComments.length.toLocaleString()} of ${totalCount.toLocaleString()} comments${activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? "s" : ""} active` : ""}`}
           </p>
         </div>
 
@@ -699,7 +714,7 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
           </div>
         ) : (
           <div>
-            {displayedComments.map((c) => {
+            {displayedComments.slice(0, renderLimit).map((c) => {
               const key = c.comment_id || c.id;
               const isExpanded = expandedRows.has(key);
               const initials = (c.author || "?").substring(0, 2).toUpperCase();
@@ -756,6 +771,20 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
               );
             })}
 
+            {/* Show more rows button */}
+            {displayedComments.length > renderLimit && (
+              <div className="py-4 text-center border-t border-border/30">
+                <button
+                  onClick={() => setRenderLimit(prev => prev + RENDER_PAGE)}
+                  className="flex items-center gap-2 mx-auto text-sm font-medium text-primary hover:text-primary/80 transition-colors px-4 py-2 rounded-lg hover:bg-primary/5"
+                >
+                  Show {Math.min(RENDER_PAGE, displayedComments.length - renderLimit).toLocaleString()} more
+                  <span className="text-xs text-muted-foreground">
+                    ({renderLimit.toLocaleString()} of {displayedComments.length.toLocaleString()} shown)
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
