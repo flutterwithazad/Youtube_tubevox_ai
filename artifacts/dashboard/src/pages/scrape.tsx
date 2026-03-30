@@ -422,6 +422,20 @@ export default function Scrape() {
           result = await response.json();
 
           if (!response.ok || result.error) {
+            if (result.error === "concurrent_invocation") {
+              // Another browser tab is already running this job.
+              // Stop this loop and switch to polling mode — don't show "failed".
+              setIsRunning(false);
+              toast.warning(
+                "This job is already running in another tab. Close the other tab to scrape here.",
+                { duration: 8000 }
+              );
+              setState("input");
+              setActiveJobId(null);
+              setActiveJob(null);
+              return;
+            }
+
             if (result.error === "insufficient_credits") {
               // Edge function ran out of credits mid-scrape.
               // The 402 response always includes job_id and comment_count so we can

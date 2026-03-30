@@ -145,6 +145,25 @@ serve(async (req) => {
 
       if (getErr || !existingJob) return json({ error: "Job not found" }, 404);
       job = existingJob;
+
+      // ── Server-side concurrency lock ───────────────────────
+      // Atomically claims a 30-second exclusive processing window for this job.
+      // Prevents multiple browser tabs / React StrictMode from running concurrent
+      // invocations, each fetching different YouTube pages and tripling costs.
+      const { data: claimed, error: lockErr } = await supabase.rpc(
+        "claim_job_invocation",
+        { p_job_id: existingJobId, p_user_id: user.id }
+      );
+      if (lockErr) {
+        console.error("Lock RPC error:", lockErr.message); // non-fatal — let it proceed
+      } else if (!claimed) {
+        console.log(`[JOB:${existingJobId.slice(0,8)}] Concurrent invocation rejected — lock held`);
+        return json({
+          error:   "concurrent_invocation",
+          message: "Another browser session is already running this job. Please use one tab.",
+          done:    false,
+        }, 409);
+      }
     } else {
       const { data: newJob, error: jobErr } = await supabase
         .from("jobs")
@@ -307,7 +326,7 @@ serve(async (req) => {
         await supabase.from("jobs").update({
           status:              "running",
           downloaded_comments: totalSoFar,
-          filters: { ...(job.filters ?? {}), _resume_token: startPageToken ?? null },
+          filters: { ...(job.filters ?? {}), _resume_token: startPageToken ?? null, _locked_at: null },
         }).eq("id", job.id);
 
         return json({
@@ -362,7 +381,7 @@ serve(async (req) => {
         downloaded_comments: totalAcrossAllInvocations,
         completed_at:        new Date().toISOString(),
         error_message:       "Partial results — credits exhausted before all comments were fetched",
-        filters:             { ...(job.filters ?? {}), _resume_token: null },
+        filters:             { ...(job.filters ?? {}), _resume_token: null, _locked_at: null },
       }).eq("id", job.id);
 
       return json({
@@ -382,19 +401,19 @@ serve(async (req) => {
 
     if (!isCancelled) {
       if (done) {
-        // All comments fetched — mark completed, clear resume token
+        // All comments fetched — mark completed, clear resume token + lock
         await supabase.from("jobs").update({
           status:              "completed",
           downloaded_comments: totalAcrossAllInvocations,
           completed_at:        new Date().toISOString(),
-          filters:             { ...(job.filters ?? {}), _resume_token: null },
+          filters:             { ...(job.filters ?? {}), _resume_token: null, _locked_at: null },
         }).eq("id", job.id);
       } else {
-        // More pages remain — save resume token so the frontend can continue
-        // after a page refresh without losing its place in the comment stream.
+        // More pages remain — save resume token and release lock so the next
+        // invocation can claim it immediately (no 120s wait needed).
         await supabase.from("jobs").update({
           downloaded_comments: totalAcrossAllInvocations,
-          filters:             { ...(job.filters ?? {}), _resume_token: nextPageToken },
+          filters:             { ...(job.filters ?? {}), _resume_token: nextPageToken, _locked_at: null },
         }).eq("id", job.id);
       }
     } else {
@@ -402,7 +421,7 @@ serve(async (req) => {
         downloaded_comments: totalAcrossAllInvocations,
         completed_at:        new Date().toISOString(),
         status:              "cancelled",
-        filters:             { ...(job.filters ?? {}), _resume_token: null },
+        filters:             { ...(job.filters ?? {}), _resume_token: null, _locked_at: null },
       }).eq("id", job.id);
     }
 
