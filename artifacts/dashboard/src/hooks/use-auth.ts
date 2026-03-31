@@ -28,8 +28,16 @@ export function useAuth() {
       .single();
     if (data) {
       setProfile(data);
-      // If the user was suspended server-side, sign them out immediately
+      // If the user is suspended, persist the reason before signing out
+      // so the login page can read it after remounting
       if (data.is_suspended) {
+        sessionStorage.setItem(
+          "suspended_info",
+          JSON.stringify({
+            reason: data.suspended_reason || "Your account has been suspended.",
+            suspended_at: data.suspended_at,
+          })
+        );
         await supabase.auth.signOut();
       }
     } else {

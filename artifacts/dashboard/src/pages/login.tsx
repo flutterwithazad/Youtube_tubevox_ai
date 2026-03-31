@@ -11,11 +11,19 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailLoading, setEmailLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const [suspendedReason, setSuspendedReason] = useState<string | null>(null);
+  // Read suspension info from sessionStorage on mount — survives the
+  // unmount/remount cycle caused by onAuthStateChange setting isLoading=true.
+  const [suspendedInfo, setSuspendedInfo] = useState<{ reason: string; suspended_at: string | null } | null>(() => {
+    try {
+      const raw = sessionStorage.getItem("suspended_info");
+      if (raw) { sessionStorage.removeItem("suspended_info"); return JSON.parse(raw); }
+    } catch {}
+    return null;
+  });
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSuspendedReason(null);
+    setSuspendedInfo(null);
     try {
       setEmailLoading(true);
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -25,13 +33,19 @@ export default function Login() {
       if (userId) {
         const { data: profile } = await supabase
           .from("profiles")
-          .select("is_suspended, suspended_reason")
+          .select("is_suspended, suspended_reason, suspended_at")
           .eq("id", userId)
           .single();
 
         if (profile?.is_suspended) {
+          const info = {
+            reason: profile.suspended_reason || "Your account has been suspended.",
+            suspended_at: profile.suspended_at ?? null,
+          };
+          // Persist before signOut so the banner survives the component remount
+          sessionStorage.setItem("suspended_info", JSON.stringify(info));
           await supabase.auth.signOut();
-          setSuspendedReason(profile.suspended_reason || "Your account has been suspended. Contact support for more information.");
+          setSuspendedInfo(info);
           return;
         }
       }
@@ -93,17 +107,32 @@ export default function Login() {
         </div>
 
         {/* Suspension banner */}
-        {suspendedReason && (
-          <div className="mb-4 bg-destructive/10 border border-destructive/30 rounded-xl p-4 flex gap-3">
-            <ShieldX className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-destructive mb-1">Account Suspended</p>
-              <p className="text-sm text-foreground/80">{suspendedReason}</p>
+        {suspendedInfo && (
+          <div className="mb-4 bg-destructive/10 border border-destructive/30 rounded-xl p-4">
+            <div className="flex gap-3 mb-3">
+              <ShieldX className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-destructive">Account Suspended</p>
+                <p className="text-sm text-foreground/80 mt-1 leading-relaxed">
+                  {suspendedInfo.reason}
+                </p>
+                {suspendedInfo.suspended_at && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Suspended on{" "}
+                    {new Date(suspendedInfo.suspended_at).toLocaleDateString("en-US", {
+                      year: "numeric", month: "long", day: "numeric",
+                    })}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 bg-background/60 rounded-lg px-3 py-2 border border-border">
+              <span className="text-xs text-muted-foreground">Need help?</span>
               <a
                 href="mailto:support@ytscraper.com"
-                className="text-xs text-primary hover:underline mt-1 block"
+                className="text-xs font-semibold text-primary hover:underline"
               >
-                Contact support@ytscraper.com
+                support@ytscraper.com
               </a>
             </div>
           </div>
