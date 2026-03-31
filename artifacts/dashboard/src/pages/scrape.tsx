@@ -1227,6 +1227,7 @@ export default function Scrape() {
 
             {activeJobId && (activeJob?.downloaded_comments ?? liveCommentCount) > 0 ? (
               <CommentExplorer
+                key={activeJobId}
                 jobId={activeJobId}
                 videoTitle={activeJob?.video_title || "Scraped Video"}
                 totalCount={activeJob?.downloaded_comments ?? liveCommentCount}
