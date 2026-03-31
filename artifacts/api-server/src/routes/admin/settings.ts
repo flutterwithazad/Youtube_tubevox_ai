@@ -23,7 +23,11 @@ router.post('/:key', async (req, res) => {
     const supabase = createSupabaseAdmin();
     const { value } = req.body;
     const { data: before } = await supabase.from('platform_settings').select('value').eq('key', req.params.key).single();
-    await supabase.from('platform_settings').upsert({ key: req.params.key, value, updated_by: admin.adminId, updated_at: new Date().toISOString() });
+    const { error } = await supabase
+      .from('platform_settings')
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq('key', req.params.key);
+    if (error) throw new Error(error.message);
     await logAdminAction({ adminId: admin.adminId, action: 'settings.update', targetType: 'settings', beforeValue: { value: before?.value }, afterValue: { value } });
     return res.json({ success: true });
   } catch (e: any) {
