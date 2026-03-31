@@ -98,19 +98,6 @@ router.post('/:id/unsuspend', async (req, res) => {
   }
 });
 
-// Delete (soft)
-router.post('/:id/delete', async (req, res) => {
-  try {
-    const admin = requireAdmin(req);
-    const supabase = createSupabaseAdmin();
-    await supabase.from('profiles').update({ deleted_at: new Date().toISOString(), account_status: 'deleted' }).eq('id', req.params.id);
-    await logAdminAction({ adminId: admin.adminId, action: 'user.delete', targetType: 'user', targetId: req.params.id });
-    return res.json({ success: true });
-  } catch (e: any) {
-    return res.status(500).json({ error: e.message });
-  }
-});
-
 // Change plan
 router.post('/:id/plan', async (req, res) => {
   try {

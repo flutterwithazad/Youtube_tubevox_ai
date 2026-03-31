@@ -219,16 +219,6 @@ export default function Settings() {
                 </div>
               </form>
 
-              <div className="mt-12 pt-8 border-t border-border">
-                <h4 className="text-destructive font-bold mb-2">Danger Zone</h4>
-                <p className="text-sm text-muted-foreground mb-4">Permanently delete your account and all associated data.</p>
-                <button
-                  onClick={() => toast.error("Please contact support to delete your account.")}
-                  className="px-4 py-2 bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive hover:text-white text-sm font-bold rounded-xl transition-colors"
-                >
-                  Delete Account
-                </button>
-              </div>
             </div>
           )}
         </div>

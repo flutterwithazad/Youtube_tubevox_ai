@@ -229,14 +229,6 @@ export default function UserDetailPage() {
         )}
       </div>
 
-      {/* Danger Zone */}
-      <div className="mt-4 bg-white border border-red-200 rounded-xl p-5">
-        <h3 className="text-sm font-bold text-red-700 mb-3">Danger Zone</h3>
-        <div className="flex gap-2">
-          <Button size="sm" variant="destructive" onClick={() => setModal('delete')}>Delete Account (Soft)</Button>
-        </div>
-      </div>
-
       {/* Modals */}
       {modal === 'suspend' && (
         <Dialog open onOpenChange={() => setModal(null)}>
@@ -279,19 +271,6 @@ export default function UserDetailPage() {
             <DialogFooter>
               <Button variant="outline" onClick={() => setModal(null)}>Cancel</Button>
               <Button onClick={() => doAction('notify', { ...form, type: 'job_complete' })} disabled={working}>Send</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
-      {modal === 'delete' && (
-        <Dialog open onOpenChange={() => setModal(null)}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Delete Account</DialogTitle></DialogHeader>
-            <p className="text-sm text-gray-600">Type the user's email to confirm: <strong>{user.email}</strong></p>
-            <input onChange={e => setForm({ ...form, confirm: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-red-500 outline-none" placeholder={user.email} />
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setModal(null)}>Cancel</Button>
-              <Button variant="destructive" disabled={form.confirm !== user.email || working} onClick={() => doAction('delete')}>Delete Account</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
