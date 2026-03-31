@@ -732,9 +732,10 @@ export default function Scrape() {
 
   return (
     <DashboardShell title="New Scrape">
-      <div className="max-w-3xl mx-auto mt-4 sm:mt-10">
+      <div className="mt-4 sm:mt-10">
 
         {state === "input" && (
+          <div className="max-w-3xl mx-auto">
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="text-center mb-8">
               <h1 className="text-4xl sm:text-5xl font-display font-bold text-foreground tracking-tight mb-3">
@@ -1109,6 +1110,7 @@ export default function Scrape() {
               </div>
             </div>
           </div>
+          </div>
         )}
 
         {state === "running" && (
@@ -1179,8 +1181,9 @@ export default function Scrape() {
 
         {state === "completed" && (
           <div className="animate-in fade-in slide-in-from-bottom-8 duration-500">
+            <div className="max-w-3xl mx-auto mb-6">
             {isPartialResult ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
                     <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
@@ -1224,6 +1227,7 @@ export default function Scrape() {
                 </button>
               </div>
             )}
+            </div>
 
             {activeJobId && (activeJob?.downloaded_comments ?? liveCommentCount) > 0 ? (
               <CommentExplorer
@@ -1253,6 +1257,7 @@ export default function Scrape() {
         )}
 
         {state === "failed" && (
+          <div className="max-w-3xl mx-auto">
           <div className="text-center py-16">
             <div className="text-destructive text-5xl mb-4">✕</div>
             <h2 className="text-xl font-bold text-foreground mb-2">Scrape Failed</h2>
@@ -1263,6 +1268,7 @@ export default function Scrape() {
             >
               Try Again
             </button>
+          </div>
           </div>
         )}
       </div>
