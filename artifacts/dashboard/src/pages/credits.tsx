@@ -48,6 +48,7 @@ interface GroupedJobTx {
 }
 
 const JOBS_PER_PAGE = 10;
+const CREDITS_PER_PAGE = 10;
 
 export default function Credits() {
   const { user } = useAuth();
@@ -64,12 +65,19 @@ export default function Credits() {
   const [jobTransactions,  setJobTransactions]  = useState<GroupedJobTx[]>([]);
   const [creditRows,       setCreditRows]       = useState<LedgerRow[]>([]);
   const [jobsPage,         setJobsPage]         = useState(0);
+  const [creditsPage,      setCreditsPage]      = useState(0);
 
   const paginatedJobs = useMemo(
     () => jobTransactions.slice(jobsPage * JOBS_PER_PAGE, (jobsPage + 1) * JOBS_PER_PAGE),
     [jobTransactions, jobsPage],
   );
-  const totalPages = Math.ceil(jobTransactions.length / JOBS_PER_PAGE);
+  const totalJobPages = Math.ceil(jobTransactions.length / JOBS_PER_PAGE);
+
+  const paginatedCredits = useMemo(
+    () => creditRows.slice(creditsPage * CREDITS_PER_PAGE, (creditsPage + 1) * CREDITS_PER_PAGE),
+    [creditRows, creditsPage],
+  );
+  const totalCreditPages = Math.ceil(creditRows.length / CREDITS_PER_PAGE);
 
   useEffect(() => {
     fetchPackages();
@@ -141,6 +149,7 @@ export default function Credits() {
       );
       setJobTransactions(sorted);
       setJobsPage(0);
+      setCreditsPage(0);
 
       // Fetch positive rows (purchases, grants, bonuses)
       const { data: credits } = await supabase
@@ -377,7 +386,7 @@ export default function Credits() {
                 ))}
 
                 {/* Pagination */}
-                {totalPages > 1 && (
+                {totalJobPages > 1 && (
                   <div className="flex items-center justify-between px-4 py-3 border-t border-border/50 bg-secondary/20">
                     <span className="text-xs text-muted-foreground">
                       Showing {jobsPage * JOBS_PER_PAGE + 1}–
@@ -393,8 +402,8 @@ export default function Credits() {
                         ← Previous
                       </button>
                       <button
-                        onClick={() => setJobsPage(p => Math.min(totalPages - 1, p + 1))}
-                        disabled={jobsPage === totalPages - 1}
+                        onClick={() => setJobsPage(p => Math.min(totalJobPages - 1, p + 1))}
+                        disabled={jobsPage === totalJobPages - 1}
                         className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg disabled:opacity-40 hover:bg-secondary transition-colors"
                       >
                         Next →
@@ -435,7 +444,7 @@ export default function Credits() {
                     </td>
                   </tr>
                 ) : (
-                  creditRows.map((tx) => (
+                  paginatedCredits.map((tx) => (
                     <tr key={tx.id} className="hover:bg-secondary/30 transition-colors">
                       <td className="px-6 py-4 text-xs text-muted-foreground whitespace-nowrap">
                         {formatDistanceToNow(new Date(tx.created_at), { addSuffix: true })}
@@ -458,6 +467,33 @@ export default function Credits() {
                 )}
               </tbody>
             </table>
+
+            {/* Credits Received Pagination */}
+            {!historyLoading && totalCreditPages > 1 && (
+              <div className="flex items-center justify-between px-6 py-3 border-t border-border/50 bg-secondary/20">
+                <span className="text-xs text-muted-foreground">
+                  Showing {creditsPage * CREDITS_PER_PAGE + 1}–
+                  {Math.min((creditsPage + 1) * CREDITS_PER_PAGE, creditRows.length)} of{" "}
+                  {creditRows.length}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setCreditsPage(p => Math.max(0, p - 1))}
+                    disabled={creditsPage === 0}
+                    className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg disabled:opacity-40 hover:bg-secondary transition-colors"
+                  >
+                    ← Previous
+                  </button>
+                  <button
+                    onClick={() => setCreditsPage(p => Math.min(totalCreditPages - 1, p + 1))}
+                    disabled={creditsPage === totalCreditPages - 1}
+                    className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg disabled:opacity-40 hover:bg-secondary transition-colors"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
