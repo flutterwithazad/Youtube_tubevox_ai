@@ -39,9 +39,27 @@ export default function UserDetailPage() {
     setWorking(true);
     try {
       await api.post(`/admin/users/${id}/${action}`, body);
-      toast.success('Done');
+
+      // Optimistic state update so the button/badge flip immediately
+      if (action === 'suspend') {
+        setUser((u: any) => u ? { ...u, is_suspended: true, account_status: 'suspended', suspended_reason: body?.reason ?? null } : u);
+        toast.success('User suspended');
+      } else if (action === 'unsuspend') {
+        setUser((u: any) => u ? { ...u, is_suspended: false, account_status: 'active', suspended_reason: null } : u);
+        toast.success('User unsuspended');
+      } else {
+        toast.success('Done');
+      }
+
       setModal(null);
-      api.get(`/admin/users/${id}`).then(setUser);
+
+      // Refresh from server to sync any other state changes
+      try {
+        const fresh = await api.get(`/admin/users/${id}`);
+        setUser(fresh);
+      } catch {
+        // Refresh failed — optimistic state is still shown, that's fine
+      }
     } catch (e: any) { toast.error(e.message); } finally { setWorking(false); }
   };
 

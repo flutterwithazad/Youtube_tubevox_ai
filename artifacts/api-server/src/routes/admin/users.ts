@@ -77,11 +77,34 @@ router.post('/:id/suspend', async (req, res) => {
     const admin = requireAdmin(req);
     const supabase = createSupabaseAdmin();
     const { reason } = req.body;
-    await supabase.from('profiles').update({ is_suspended: true, account_status: 'suspended', suspended_reason: reason, suspended_at: new Date().toISOString(), suspended_by: admin.adminId }).eq('id', req.params.id);
-    // Invalidate all Supabase auth sessions immediately
-    await supabase.auth.admin.signOut(req.params.id, 'global');
-    // Also mark any tracked sessions as inactive
-    await supabase.from('user_sessions').update({ is_active: false, logged_out_at: new Date().toISOString() }).eq('user_id', req.params.id).eq('is_active', true);
+
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({
+        is_suspended:     true,
+        account_status:   'suspended',
+        suspended_reason: reason || null,
+        suspended_at:     new Date().toISOString(),
+        suspended_by:     admin.adminId,
+      })
+      .eq('id', req.params.id);
+
+    if (updateError) {
+      console.error('Suspend update failed:', updateError);
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    // Invalidate all Supabase auth sessions immediately (best-effort)
+    const { error: signOutError } = await supabase.auth.admin.signOut(req.params.id, 'global');
+    if (signOutError) console.warn('signOut warning (non-fatal):', signOutError.message);
+
+    // Mark tracked sessions as inactive (best-effort)
+    await supabase
+      .from('user_sessions')
+      .update({ is_active: false, logged_out_at: new Date().toISOString() })
+      .eq('user_id', req.params.id)
+      .eq('is_active', true);
+
     await logAdminAction({ adminId: admin.adminId, action: 'user.suspend', targetType: 'user', targetId: req.params.id, afterValue: { reason } });
     return res.json({ success: true });
   } catch (e: any) {
@@ -94,7 +117,23 @@ router.post('/:id/unsuspend', async (req, res) => {
   try {
     const admin = requireAdmin(req);
     const supabase = createSupabaseAdmin();
-    await supabase.from('profiles').update({ is_suspended: false, account_status: 'active', suspended_reason: null, suspended_at: null, suspended_by: null }).eq('id', req.params.id);
+
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({
+        is_suspended:     false,
+        account_status:   'active',
+        suspended_reason: null,
+        suspended_at:     null,
+        suspended_by:     null,
+      })
+      .eq('id', req.params.id);
+
+    if (updateError) {
+      console.error('Unsuspend update failed:', updateError);
+      return res.status(500).json({ error: updateError.message });
+    }
+
     await logAdminAction({ adminId: admin.adminId, action: 'user.unsuspend', targetType: 'user', targetId: req.params.id });
     return res.json({ success: true });
   } catch (e: any) {
