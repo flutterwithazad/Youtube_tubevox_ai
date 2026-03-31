@@ -52,8 +52,6 @@ const ALL_COLUMNS: ColDef[] = [
   { id: "likes",         label: "Likes",      width: "72px",               sortable: true,  sortKey: "likes",          toggleLabel: "Likes" },
   { id: "replies",       label: "Reply",      width: "64px",               sortable: true,  sortKey: "reply_count",    toggleLabel: "Reply count" },
   { id: "heart",         label: "Heart",      width: "56px",               sortable: false, align: "center",           toggleLabel: "❤️ Heart" },
-  { id: "pinned",        label: "Pinned",     width: "60px",               sortable: false, align: "center",           toggleLabel: "📌 Pinned" },
-  { id: "paid",          label: "Paid",       width: "56px",               sortable: false, align: "center",           toggleLabel: "💰 Paid" },
   { id: "authorChannel", label: "Channel",    width: "150px",              sortable: false,                            toggleLabel: "Author channel" },
 ];
 
@@ -816,18 +814,6 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
                             return (
                               <div key="heart" className="flex items-center justify-center">
                                 {c.liked_by_creator ? <GreenCheck /> : null}
-                              </div>
-                            );
-                          case "pinned":
-                            return (
-                              <div key="pinned" className="flex items-center justify-center">
-                                {c.is_pinned ? <GreenCheck /> : null}
-                              </div>
-                            );
-                          case "paid":
-                            return (
-                              <div key="paid" className="flex items-center justify-center">
-                                {c.is_paid ? <GreenCheck /> : null}
                               </div>
                             );
                           case "authorChannel":
