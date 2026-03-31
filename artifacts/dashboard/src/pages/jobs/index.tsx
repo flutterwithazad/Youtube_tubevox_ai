@@ -50,14 +50,20 @@ export default function JobsList() {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(50);
-    setJobs(data ?? []);
+    const jobs = data ?? [];
+    setJobs(jobs);
 
-    // Load credits spent per job from the ledger
+    if (jobs.length === 0) return;
+
+    // Fetch credits only for the job IDs we actually loaded — never the whole table.
+    // Fetching the full table risks hitting the 1000-row default page cap which
+    // silently truncates results and shows wrong (partial) per-job credit sums.
+    const jobIds = jobs.map((j) => j.id);
     const { data: ledger } = await supabase
       .from("credit_ledger")
       .select("source_id, amount")
       .lt("amount", 0)
-      .not("source_id", "is", null);
+      .in("source_id", jobIds);
 
     const map: Record<string, number> = {};
     for (const row of ledger ?? []) {
@@ -68,14 +74,27 @@ export default function JobsList() {
   };
 
   const fetchStats = async () => {
-    const [{ count: totalJobs }, { data: commentData }, { data: creditData }] = await Promise.all([
+    // Aggregation functions are disabled at the DB level, so we can't SUM in a
+    // single query. Workaround: credits_spent = total_purchased - current_balance.
+    // Purchase entries are few (typically <50) so they safely fit in one page.
+    // The balance view always reflects the true running total.
+    const [
+      { count: totalJobs },
+      { data: jobs },
+      { data: purchases },
+      { data: balanceRow },
+    ] = await Promise.all([
       supabase.from("jobs").select("*", { count: "exact", head: true }),
       supabase.from("jobs").select("downloaded_comments").eq("status", "completed"),
-      supabase.from("credit_ledger").select("amount").lt("amount", 0),
+      supabase.from("credit_ledger").select("amount").gt("amount", 0),
+      supabase.from("user_credit_balance").select("balance").maybeSingle(),
     ]);
 
-    const totalComments = commentData?.reduce((sum, j) => sum + (j.downloaded_comments ?? 0), 0) ?? 0;
-    const creditsSpent = Math.abs(creditData?.reduce((sum, r) => sum + r.amount, 0) ?? 0);
+    const totalComments = (jobs ?? []).reduce((s, j) => s + (j.downloaded_comments ?? 0), 0);
+    const totalPurchased = (purchases ?? []).reduce((s, r) => s + r.amount, 0);
+    const currentBalance = balanceRow?.balance ?? 0;
+    const creditsSpent = Math.max(0, totalPurchased - currentBalance);
+
     setStats({ totalJobs: totalJobs ?? 0, totalComments, creditsSpent });
   };
 
