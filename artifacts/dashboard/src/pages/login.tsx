@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { Play, Eye, EyeOff } from "lucide-react";
+import { Play, Eye, EyeOff, ShieldX } from "lucide-react";
 
 export default function Login() {
   const [, setLocation] = useLocation();
@@ -11,13 +11,31 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailLoading, setEmailLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [suspendedReason, setSuspendedReason] = useState<string | null>(null);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSuspendedReason(null);
     try {
       setEmailLoading(true);
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+
+      const userId = data.user?.id;
+      if (userId) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("is_suspended, suspended_reason")
+          .eq("id", userId)
+          .single();
+
+        if (profile?.is_suspended) {
+          await supabase.auth.signOut();
+          setSuspendedReason(profile.suspended_reason || "Your account has been suspended. Contact support for more information.");
+          return;
+        }
+      }
+
       toast.success("Welcome back!");
       setLocation("/scrape");
     } catch (error: any) {
@@ -73,6 +91,23 @@ export default function Login() {
             Sign in to your YTScraper account
           </p>
         </div>
+
+        {/* Suspension banner */}
+        {suspendedReason && (
+          <div className="mb-4 bg-destructive/10 border border-destructive/30 rounded-xl p-4 flex gap-3">
+            <ShieldX className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-destructive mb-1">Account Suspended</p>
+              <p className="text-sm text-foreground/80">{suspendedReason}</p>
+              <a
+                href="mailto:support@ytscraper.com"
+                className="text-xs text-primary hover:underline mt-1 block"
+              >
+                Contact support@ytscraper.com
+              </a>
+            </div>
+          </div>
+        )}
 
         <div className="bg-card border border-border rounded-2xl shadow-xl shadow-black/5 px-8 py-8">
           <button
