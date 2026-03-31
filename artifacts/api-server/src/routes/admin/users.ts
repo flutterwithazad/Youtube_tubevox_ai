@@ -85,7 +85,6 @@ router.post('/:id/suspend', async (req, res) => {
         account_status:   'suspended',
         suspended_reason: reason || null,
         suspended_at:     new Date().toISOString(),
-        suspended_by:     admin.adminId,
       })
       .eq('id', req.params.id);
 
