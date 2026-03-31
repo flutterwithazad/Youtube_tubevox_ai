@@ -1,5 +1,5 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Plus, FileText, Activity, Zap, AlertCircle, Clock, Play, RefreshCw } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useState, useEffect } from "react";
@@ -28,7 +28,9 @@ interface Stats {
 }
 
 export default function JobsList() {
+  const [, setLocation] = useLocation();
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [creditsByJob, setCreditsByJob] = useState<Record<string, number>>({});
   const [stats, setStats] = useState<Stats>({ totalJobs: 0, totalComments: 0, creditsSpent: 0 });
   const [loading, setLoading] = useState(true);
 
@@ -49,6 +51,20 @@ export default function JobsList() {
       .order("created_at", { ascending: false })
       .limit(50);
     setJobs(data ?? []);
+
+    // Load credits spent per job from the ledger
+    const { data: ledger } = await supabase
+      .from("credit_ledger")
+      .select("source_id, amount")
+      .lt("amount", 0)
+      .not("source_id", "is", null);
+
+    const map: Record<string, number> = {};
+    for (const row of ledger ?? []) {
+      if (!row.source_id) continue;
+      map[row.source_id] = (map[row.source_id] ?? 0) + Math.abs(row.amount);
+    }
+    setCreditsByJob(map);
   };
 
   const fetchStats = async () => {
@@ -166,7 +182,11 @@ export default function JobsList() {
                 </tr>
               ) : (
                 jobs.map((job) => (
-                  <tr key={job.id} className="hover:bg-secondary/30 transition-colors">
+                  <tr
+                    key={job.id}
+                    className="hover:bg-secondary/30 transition-colors cursor-pointer"
+                    onClick={() => setLocation(`/jobs/${job.id}`)}
+                  >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-4">
                         <div className="w-16 h-10 bg-muted rounded shrink-0 relative overflow-hidden border border-border">
@@ -199,12 +219,14 @@ export default function JobsList() {
                         <span className="text-xs text-muted-foreground ml-1">/ {job.requested_comments.toLocaleString()}</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 font-mono text-muted-foreground">{job.credits_used ?? "—"}</td>
+                    <td className="px-6 py-4 font-mono text-muted-foreground">
+                      {creditsByJob[job.id] != null ? creditsByJob[job.id].toLocaleString() : "—"}
+                    </td>
                     <td className="px-6 py-4 text-muted-foreground flex items-center gap-1.5">
                       <Clock className="w-3 h-3 shrink-0" />
                       {formatDistanceToNow(new Date(job.created_at), { addSuffix: true })}
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-2">
                         {(job.downloaded_comments ?? 0) > 0 && (
                           <Link href={`/jobs/${job.id}`}>
@@ -217,7 +239,7 @@ export default function JobsList() {
                           </Link>
                         )}
                         {job.status === "running" && (
-                          <button onClick={() => handleCancel(job.id)} className="text-xs font-medium text-destructive hover:underline">Cancel</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleCancel(job.id); }} className="text-xs font-medium text-destructive hover:underline">Cancel</button>
                         )}
                       </div>
                     </td>
