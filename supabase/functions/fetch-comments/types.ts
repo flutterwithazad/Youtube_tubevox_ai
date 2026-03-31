@@ -32,7 +32,7 @@ export interface Comment {
   reply_count:           number;
   is_reply:              boolean;
   parent_id:             string | null;
-  liked_by_creator:      boolean;
+  heart:                 boolean;
   is_pinned:             boolean;
   is_paid:               boolean;
 }

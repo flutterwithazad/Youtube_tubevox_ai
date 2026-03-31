@@ -143,7 +143,7 @@ export class YouTubeApi {
           reply_count:           0,
           is_reply:              true,
           parent_id:             parentId,
-          liked_by_creator:      rs.likedByCreator       ?? false,
+          heart:                 rs.likedByCreator        ?? false,
           is_pinned:             false,
           is_paid:               false,
         });
@@ -249,7 +249,7 @@ export class YouTubeApi {
           reply_count:           item.snippet.totalReplyCount ?? 0,
           is_reply:              false,
           parent_id:             null,
-          liked_by_creator:      top.likedByCreator       ?? false,
+          heart:                 top.likedByCreator        ?? false,
           is_pinned:             false,
           is_paid:               false,
         });

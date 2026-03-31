@@ -32,14 +32,14 @@ export const recordExport = async (jobId: string, format: string, rowCount: numb
 };
 
 export const downloadCSV = (comments: any[], filename: string, videoUrl?: string) => {
-  const headers = ["Published", "Author", "Author Channel", "Comment", "Likes", "Reply Count", "Is Reply", "Parent ID", "Liked By Creator", "Video URL"];
+  const headers = ["Published", "Author", "Author Channel", "Comment", "Likes", "Reply Count", "Is Reply", "Parent ID", "Heart", "Video URL"];
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const rows = comments.map((c) => [
     c.published_at ? new Date(c.published_at).toISOString() : "",
     esc(c.author), esc(c.author_channel), esc(c.text),
     c.likes ?? 0, c.reply_count ?? 0,
     c.is_reply ? "true" : "false", c.parent_id ?? "",
-    c.liked_by_creator ? "true" : "false",
+    c.heart ? "true" : "false",
     esc(videoUrl ?? ""),
   ].join(","));
   const csv = "\uFEFF" + [headers.join(","), ...rows].join("\n");
@@ -57,7 +57,7 @@ export const downloadJSON = (comments: any[], filename: string, videoTitle: stri
       id: c.comment_id, author: c.author, author_channel: c.author_channel,
       text: c.text, likes: c.likes, reply_count: c.reply_count,
       is_reply: c.is_reply, parent_id: c.parent_id ?? null,
-      liked_by_creator: c.liked_by_creator ?? false,
+      heart: c.heart ?? false,
       published_at: c.published_at,
     })),
   };
@@ -75,7 +75,7 @@ export const downloadExcel = (comments: any[], filename: string, videoUrl?: stri
     "Reply Count": c.reply_count ?? 0,
     "Is Reply": c.is_reply ? "Yes" : "No",
     "Parent ID": c.parent_id ?? "",
-    "Liked By Creator": c.liked_by_creator ? "Yes" : "No",
+    "Heart": c.heart ? "Yes" : "No",
     "Video URL": videoUrl ?? "",
   }));
   const ws = XLSX.utils.json_to_sheet(rows);

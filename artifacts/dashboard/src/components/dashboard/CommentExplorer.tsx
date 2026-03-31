@@ -814,7 +814,7 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
                           case "heart":
                             return (
                               <div key="heart" className="flex items-center justify-center">
-                                {c.liked_by_creator ? <GreenCheck /> : null}
+                                {c.heart ? <GreenCheck /> : null}
                               </div>
                             );
                           case "authorChannel":
