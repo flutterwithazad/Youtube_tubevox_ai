@@ -1,0 +1,279 @@
+Refactor the Comment Explorer table into a professional data grid system while preserving all existing functionality such as filtering, exporting, searching, and field selection.
+
+Do not remove any existing features. Instead, restructure the implementation to be scalable, stable, and consistent.
+
+---
+
+CORE GOAL
+
+Transform the current table into a proper data grid that supports:
+
+stable layout
+large datasets
+dynamic column visibility
+smooth scrolling
+clean UI
+
+The result should feel like a spreadsheet or analytics tool.
+
+---
+
+DATA GRID ARCHITECTURE
+
+Separate the system into three layers:
+
+1. Data layer
+2. State layer
+3. UI layer
+
+---
+
+DATA LAYER
+
+Maintain a single source of truth for all comments.
+
+This should include the full dataset for the job.
+
+Do not rely only on visible rows.
+
+---
+
+STATE LAYER
+
+Create a centralized state that controls:
+
+search query
+active filters
+sorting
+visible columns
+pagination or virtual range
+
+All UI should derive from this state.
+
+---
+
+DERIVED DATA
+
+Create a computed dataset:
+
+filteredData = apply search + filters
+sortedData = apply sorting
+visibleData = apply pagination or virtualization
+
+This ensures consistency across table and export.
+
+---
+
+TABLE RENDERING
+
+Render only visibleData.
+
+Do not render the entire dataset if large.
+
+Support efficient updates when state changes.
+
+---
+
+COLUMN CONFIG SYSTEM
+
+Define all columns in a configuration object.
+
+Each column should include:
+
+id
+label
+width or flex size
+visibility
+sortable (true/false)
+
+Example columns:
+
+published
+author
+comment
+likes
+reply
+heart
+
+
+---
+
+COLUMN VISIBILITY
+
+The "Fields" dropdown should control column visibility.
+
+When toggled:
+
+update state
+re-render grid
+preserve layout stability
+
+Hidden columns should not break alignment.
+
+---
+
+COLUMN WIDTH SYSTEM
+
+Use a mix of fixed and flexible widths.
+
+Example:
+
+Published → fixed small
+Author → medium
+Comment → flexible (largest)
+Likes → small
+
+Ensure no overlap or collapse.
+
+---
+
+STICKY HEADER
+
+The table header must remain visible while scrolling.
+
+This is required for usability.
+
+---
+
+SCROLLING SYSTEM
+
+Fix the current broken scrolling behavior.
+
+Requirements:
+
+Page scroll should work normally
+Table should support vertical scroll only when needed
+Horizontal scroll must work smoothly
+
+Avoid nested scroll conflicts.
+
+---
+
+ROW RENDERING
+
+Rows should:
+
+have consistent height
+support text wrapping in comment column
+not shift layout when data changes
+
+---
+
+SORTING SYSTEM
+
+Clicking column headers should:
+
+toggle ascending / descending
+update state
+re-render data
+
+Sorting must work on the full dataset, not only visible rows.
+
+---
+
+FILTER SYSTEM
+
+Filters must:
+
+update centralized state
+apply to full dataset
+sync with export
+
+Do not apply filters only visually.
+
+---
+
+SEARCH SYSTEM
+
+Search should:
+
+filter across comment text and author
+update in real time
+integrate with filters
+
+---
+
+EXPORT SYSTEM (IMPORTANT)
+
+Export must use the same derived dataset.
+
+Filtered export:
+
+export filteredData
+
+Full export:
+
+export full dataset
+
+Do not export only visible rows.
+
+---
+
+PERFORMANCE (VERY IMPORTANT)
+
+For large datasets:
+
+Do not render all rows at once
+
+Use one of:
+
+simple pagination
+or virtual scrolling
+
+This prevents UI lag.
+
+---
+
+LOADING STATE
+
+While loading:
+
+Show skeleton rows
+
+Do not show empty table.
+
+---
+
+EMPTY STATE
+
+If no results:
+
+Show:
+
+"No comments found"
+
+---
+
+UI CONSISTENCY
+
+Ensure:
+
+aligned columns
+consistent spacing
+clean typography
+no overlapping elements
+
+---
+
+DROPDOWN BEHAVIOR
+
+All dropdowns (filter, fields, export) must:
+
+open in correct position
+not overflow
+close on outside click
+
+---
+
+USER EXPERIENCE GOAL
+
+The table should feel like a professional analytics tool.
+
+Users should be able to:
+
+scroll smoothly
+toggle columns without breaking layout
+filter and search instantly
+export accurate data
+
+This should feel similar to a spreadsheet or data platform.
