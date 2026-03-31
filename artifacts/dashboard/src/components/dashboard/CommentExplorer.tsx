@@ -173,7 +173,7 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
     "28px",
     visibleFields.published     ? "96px"  : null,
     visibleFields.author        ? "160px" : null,
-    "1fr",
+    "minmax(200px, 1fr)",
     visibleFields.likes         ? "72px"  : null,
     visibleFields.replies       ? "64px"  : null,
     visibleFields.heart         ? "56px"  : null,
@@ -668,10 +668,14 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
         </div>
       )}
 
+      {/* ── Shared horizontal scroll wrapper (header + body move together) ───── */}
+      <div className="flex-1 min-h-0 overflow-x-auto">
+        <div className="flex flex-col h-full min-w-[700px]">
+
       {/* ── Table Header ─────────────────────────────────────────────────────── */}
       <div
         style={{ display: "grid", gridTemplateColumns: computedGridTemplate }}
-        className="gap-4 px-4 py-3 bg-secondary/50 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wider shrink-0 pr-6"
+        className="gap-4 px-4 py-3 bg-secondary/50 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wider shrink-0"
       >
         <div />
         {visibleFields.published     && <div>Published</div>}
@@ -686,7 +690,7 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
       </div>
 
       {/* ── Table Body ───────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto bg-card">
+      <div className="flex-1 overflow-y-auto bg-card min-h-0">
         {loading ? (
           Array.from({ length: 10 }).map((_, i) => (
             <div key={i} style={{ display: "grid", gridTemplateColumns: computedGridTemplate }} className="gap-4 px-4 py-4 border-b border-border/50">
@@ -798,6 +802,8 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
           </div>
         )}
       </div>
+        </div>{/* end min-w inner flex */}
+      </div>{/* end overflow-x-auto wrapper */}
 
       {/* ── Footer ───────────────────────────────────────────────────────────── */}
       {!loading && (
