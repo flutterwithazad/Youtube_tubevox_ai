@@ -30,7 +30,6 @@ interface Stats {
 export default function JobsList() {
   const [, setLocation] = useLocation();
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [creditsByJob, setCreditsByJob] = useState<Record<string, number>>({});
   const [stats, setStats] = useState<Stats>({ totalJobs: 0, totalComments: 0, creditsSpent: 0 });
   const [loading, setLoading] = useState(true);
 
@@ -50,27 +49,7 @@ export default function JobsList() {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(50);
-    const jobs = data ?? [];
-    setJobs(jobs);
-
-    if (jobs.length === 0) return;
-
-    // Fetch credits only for the job IDs we actually loaded — never the whole table.
-    // Fetching the full table risks hitting the 1000-row default page cap which
-    // silently truncates results and shows wrong (partial) per-job credit sums.
-    const jobIds = jobs.map((j) => j.id);
-    const { data: ledger } = await supabase
-      .from("credit_ledger")
-      .select("source_id, amount")
-      .lt("amount", 0)
-      .in("source_id", jobIds);
-
-    const map: Record<string, number> = {};
-    for (const row of ledger ?? []) {
-      if (!row.source_id) continue;
-      map[row.source_id] = (map[row.source_id] ?? 0) + Math.abs(row.amount);
-    }
-    setCreditsByJob(map);
+    setJobs(data ?? []);
   };
 
   const fetchStats = async () => {
@@ -175,7 +154,6 @@ export default function JobsList() {
                 <th className="px-6 py-4">Target Video</th>
                 <th className="px-6 py-4">Status</th>
                 <th className="px-6 py-4">Comments</th>
-                <th className="px-6 py-4">Credits</th>
                 <th className="px-6 py-4">Date</th>
                 <th className="px-6 py-4"></th>
               </tr>
@@ -187,14 +165,13 @@ export default function JobsList() {
                     <td className="px-6 py-4"><div className="flex gap-3 items-center"><Skeleton className="w-12 h-8 rounded shrink-0" /><div><Skeleton className="h-4 w-40 mb-1" /><Skeleton className="h-3 w-24" /></div></div></td>
                     <td className="px-6 py-4"><Skeleton className="h-6 w-20 rounded-md" /></td>
                     <td className="px-6 py-4"><Skeleton className="h-4 w-16" /></td>
-                    <td className="px-6 py-4"><Skeleton className="h-4 w-8" /></td>
                     <td className="px-6 py-4"><Skeleton className="h-4 w-24" /></td>
                     <td className="px-6 py-4"></td>
                   </tr>
                 ))
               ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-16 text-center text-muted-foreground">
+                  <td colSpan={5} className="px-6 py-16 text-center text-muted-foreground">
                     <Play className="w-10 h-10 mx-auto mb-3 opacity-20" />
                     No scrape jobs yet. Start your first scrape!
                   </td>
@@ -237,9 +214,6 @@ export default function JobsList() {
                       {job.requested_comments && (
                         <span className="text-xs text-muted-foreground ml-1">/ {job.requested_comments.toLocaleString()}</span>
                       )}
-                    </td>
-                    <td className="px-6 py-4 font-mono text-muted-foreground">
-                      {creditsByJob[job.id] != null ? creditsByJob[job.id].toLocaleString() : "—"}
                     </td>
                     <td className="px-6 py-4 text-muted-foreground flex items-center gap-1.5">
                       <Clock className="w-3 h-3 shrink-0" />
