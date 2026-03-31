@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 interface CommentExplorerProps {
   jobId: string;
   videoTitle: string;
+  videoUrl?: string;
   totalCount: number;
   isPartial?: boolean;
   jobStatus?: string;
@@ -83,7 +84,7 @@ const GreenCheck = () => (
 
 // ── Component ───────────────────────────────────────────────────────────────
 
-export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobStatus }: CommentExplorerProps) {
+export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPartial, jobStatus }: CommentExplorerProps) {
 
   // ── Data layer ──────────────────────────────────────────────────────────
   const [comments, setComments] = useState<any[]>([]);
@@ -285,9 +286,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
 
   const exportFiltered = async (format: "csv" | "xlsx" | "json") => {
     const data = displayedComments;
-    if (format === "csv")  downloadCSV(data, slug);
-    if (format === "xlsx") downloadExcel(data, slug);
-    if (format === "json") downloadJSON(data, slug, videoTitle);
+    if (format === "csv")  downloadCSV(data, slug, videoUrl);
+    if (format === "xlsx") downloadExcel(data, slug, videoUrl);
+    if (format === "json") downloadJSON(data, slug, videoTitle, videoUrl);
     toast.success(`Exported ${data.length.toLocaleString()} comments as ${format.toUpperCase()}`);
   };
 
@@ -295,9 +296,9 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
     const id = toast.loading(`Fetching all ${totalCount.toLocaleString()} comments…`);
     try {
       const all = await fetchAllCommentsForExport(jobId);
-      if (format === "csv")  downloadCSV(all, slug);
-      if (format === "xlsx") downloadExcel(all, slug);
-      if (format === "json") downloadJSON(all, slug, videoTitle);
+      if (format === "csv")  downloadCSV(all, slug, videoUrl);
+      if (format === "xlsx") downloadExcel(all, slug, videoUrl);
+      if (format === "json") downloadJSON(all, slug, videoTitle, videoUrl);
       await recordExport(jobId, format, all.length);
       toast.success(`Exported ${all.length.toLocaleString()} comments`, { id });
     } catch (e: any) {

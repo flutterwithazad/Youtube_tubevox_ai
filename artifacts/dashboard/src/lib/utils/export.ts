@@ -31,24 +31,26 @@ export const recordExport = async (jobId: string, format: string, rowCount: numb
   });
 };
 
-export const downloadCSV = (comments: any[], filename: string) => {
-  const headers = ["Published", "Author", "Author Channel", "Comment", "Likes", "Reply Count", "Is Reply", "Parent ID"];
+export const downloadCSV = (comments: any[], filename: string, videoUrl?: string) => {
+  const headers = ["Published", "Author", "Author Channel", "Comment", "Likes", "Reply Count", "Is Reply", "Parent ID", "Video URL"];
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const rows = comments.map((c) => [
     c.published_at ? new Date(c.published_at).toISOString() : "",
     esc(c.author), esc(c.author_channel), esc(c.text),
     c.likes ?? 0, c.reply_count ?? 0,
     c.is_reply ? "true" : "false", c.parent_id ?? "",
+    esc(videoUrl ?? ""),
   ].join(","));
   const csv = "\uFEFF" + [headers.join(","), ...rows].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   triggerDownload(blob, `${filename}_comments.csv`);
 };
 
-export const downloadJSON = (comments: any[], filename: string, videoTitle: string) => {
+export const downloadJSON = (comments: any[], filename: string, videoTitle: string, videoUrl?: string) => {
   const payload = {
     exported_at: new Date().toISOString(),
     video_title: videoTitle,
+    video_url: videoUrl ?? null,
     total: comments.length,
     comments: comments.map((c) => ({
       id: c.comment_id, author: c.author, author_channel: c.author_channel,
@@ -61,7 +63,7 @@ export const downloadJSON = (comments: any[], filename: string, videoTitle: stri
   triggerDownload(blob, `${filename}_comments.json`);
 };
 
-export const downloadExcel = (comments: any[], filename: string) => {
+export const downloadExcel = (comments: any[], filename: string, videoUrl?: string) => {
   const rows = comments.map((c) => ({
     Published: c.published_at ? new Date(c.published_at).toLocaleDateString() : "",
     Author: c.author ?? "",
@@ -71,9 +73,10 @@ export const downloadExcel = (comments: any[], filename: string) => {
     "Reply Count": c.reply_count ?? 0,
     "Is Reply": c.is_reply ? "Yes" : "No",
     "Parent ID": c.parent_id ?? "",
+    "Video URL": videoUrl ?? "",
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws["!cols"] = [{ wch: 14 }, { wch: 25 }, { wch: 35 }, { wch: 80 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 22 }];
+  ws["!cols"] = [{ wch: 14 }, { wch: 25 }, { wch: 35 }, { wch: 80 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 22 }, { wch: 45 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Comments");
   XLSX.writeFile(wb, `${filename}_comments.xlsx`);

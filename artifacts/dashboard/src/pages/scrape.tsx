@@ -1234,6 +1234,7 @@ export default function Scrape() {
                 key={activeJobId}
                 jobId={activeJobId}
                 videoTitle={activeJob?.video_title || "Scraped Video"}
+                videoUrl={activeJob?.video_url ?? undefined}
                 totalCount={activeJob?.downloaded_comments ?? liveCommentCount}
                 isPartial={isPartialResult}
                 jobStatus={activeJob?.status}

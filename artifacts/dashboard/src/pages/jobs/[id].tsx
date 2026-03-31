@@ -150,6 +150,7 @@ export default function JobDetail() {
         <CommentExplorer
           jobId={jobId}
           videoTitle={job.video_title || "Video"}
+          videoUrl={job.video_url ?? undefined}
           totalCount={job.downloaded_comments ?? 0}
           isPartial={job.status !== "completed"}
           jobStatus={job.status}
