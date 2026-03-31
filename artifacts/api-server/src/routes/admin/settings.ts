@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createSupabaseAdmin } from '../../lib/supabase-admin.js';
 import { requireAdmin } from '../../lib/admin-auth.js';
 import { logAdminAction } from '../../lib/audit.js';
+import { invalidateSettingsCache } from '../../middleware/platform.js';
 
 const router = Router();
 
@@ -28,6 +29,7 @@ router.post('/:key', async (req, res) => {
       .update({ value, updated_at: new Date().toISOString() })
       .eq('key', req.params.key);
     if (error) throw new Error(error.message);
+    invalidateSettingsCache();
     await logAdminAction({ adminId: admin.adminId, action: 'settings.update', targetType: 'settings', beforeValue: { value: before?.value }, afterValue: { value } });
     return res.json({ success: true });
   } catch (e: any) {

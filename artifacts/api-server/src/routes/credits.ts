@@ -1,6 +1,7 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { createSupabaseAdmin } from '../lib/supabase-admin.js';
+import { checkUserSuspension } from '../middleware/platform.js';
 
 const router = Router();
 
@@ -13,19 +14,35 @@ function getUserSupabase(accessToken: string) {
   });
 }
 
+async function resolveUser(req: Request, res: Response): Promise<{ id: string } | null> {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader?.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Missing or invalid Authorization header' });
+    return null;
+  }
+  const accessToken = authHeader.slice(7);
+  const userClient = getUserSupabase(accessToken);
+  const { data: { user }, error: authError } = await userClient.auth.getUser();
+  if (authError || !user) {
+    res.status(401).json({ error: 'Invalid or expired token' });
+    return null;
+  }
+  const suspension = await checkUserSuspension(user.id);
+  if (suspension.suspended) {
+    res.status(403).json({
+      error: 'SUSPENDED',
+      message: 'Your account has been suspended.',
+      reason: suspension.reason,
+    });
+    return null;
+  }
+  return { id: user.id };
+}
+
 router.post('/deduct', async (req, res) => {
   try {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-    }
-    const accessToken = authHeader.slice(7);
-
-    const userClient = getUserSupabase(accessToken);
-    const { data: { user }, error: authError } = await userClient.auth.getUser();
-    if (authError || !user) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
+    const user = await resolveUser(req, res);
+    if (!user) return;
 
     const { amount, job_id, description } = req.body;
     if (!amount || typeof amount !== 'number' || amount <= 0) {
@@ -103,17 +120,8 @@ router.post('/deduct', async (req, res) => {
 // Replace this route's internals with a real Stripe/payment flow later.
 router.post('/purchase', async (req, res) => {
   try {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-    }
-    const accessToken = authHeader.slice(7);
-
-    const userClient = getUserSupabase(accessToken);
-    const { data: { user }, error: authError } = await userClient.auth.getUser();
-    if (authError || !user) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
+    const user = await resolveUser(req, res);
+    if (!user) return;
 
     const { package_id } = req.body;
     if (!package_id || typeof package_id !== 'string') {
@@ -121,7 +129,6 @@ router.post('/purchase', async (req, res) => {
     }
 
     const supabase = createSupabaseAdmin();
-
     // Look up the package
     const { data: pkg, error: pkgErr } = await supabase
       .from('credit_packages')
@@ -167,17 +174,8 @@ router.post('/purchase', async (req, res) => {
 
 router.get('/balance', async (req, res) => {
   try {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-    }
-    const accessToken = authHeader.slice(7);
-
-    const userClient = getUserSupabase(accessToken);
-    const { data: { user }, error: authError } = await userClient.auth.getUser();
-    if (authError || !user) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
+    const user = await resolveUser(req, res);
+    if (!user) return;
 
     const supabase = createSupabaseAdmin();
     const { data, error } = await supabase

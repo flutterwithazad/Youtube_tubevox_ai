@@ -1,0 +1,182 @@
+Upgrade the Admin Panel settings and user suspension system to be fully dynamic and enforced at the backend level.
+
+Currently these controls exist only in the UI and do not affect real system behavior. Convert them into a real system that controls access, authentication, and user activity.
+
+---
+
+PART 1: PLATFORM SETTINGS (MAINTENANCE MODE + SIGNUPS)
+
+Create a dynamic system for platform-wide settings.
+
+---
+
+DATABASE REQUIREMENT
+
+Ensure there is a table that stores platform settings with key-value structure.
+
+Each setting should include:
+
+key
+value
+updated_at
+
+Store at least:
+
+maintenance_mode (true/false)
+allow_new_signups (true/false)
+
+---
+
+BACKEND ENFORCEMENT
+
+Maintenance Mode:
+
+When enabled:
+
+Block all normal users from accessing the app
+Show a maintenance message page
+
+Admin users should still have access
+
+---
+
+Signup Control:
+
+When allow_new_signups is false:
+
+Block new user registrations
+Show message:
+
+"New registrations are currently disabled"
+
+---
+
+API / AUTH MIDDLEWARE
+
+Every request should check platform settings.
+
+If maintenance_mode is true:
+
+Reject requests from normal users
+
+---
+
+PART 2: USER SUSPENSION SYSTEM
+
+Make user suspension fully enforced.
+
+---
+
+DATABASE REQUIREMENT
+
+In user profile table ensure fields exist:
+
+is_suspended (boolean)
+suspended_reason (text)
+account_status (active / suspended)
+
+---
+
+LOGIN BLOCK
+
+When a suspended user tries to login:
+
+Reject login
+Show message:
+
+"Your account has been suspended"
+
+Display the suspension reason clearly.
+
+---
+
+ACTIVE SESSION CONTROL (IMPORTANT)
+
+If a user is already logged in and gets suspended:
+
+Immediately log them out from all devices.
+
+---
+
+SESSION INVALIDATION
+
+When admin suspends a user:
+
+Invalidate all active sessions of that user
+
+Set all sessions as inactive
+
+---
+
+REAL-TIME ENFORCEMENT
+
+On every API request:
+
+Check if user is suspended
+
+If suspended:
+
+Force logout
+Return error response
+
+---
+
+FRONTEND HANDLING
+
+If API returns suspended status:
+
+Clear auth session
+Redirect to login page
+
+Show suspension message with reason
+
+---
+
+ADMIN PANEL BEHAVIOR
+
+When admin suspends a user:
+
+Require entering a reason
+
+Save reason in database
+
+Show confirmation
+
+---
+
+UNSUSPEND FLOW
+
+When admin reactivates user:
+
+Set is_suspended to false
+Allow login again
+
+---
+
+USER EXPERIENCE GOAL
+
+Admin controls should have real impact on the system.
+
+Admins must be able to:
+
+shut down the platform
+disable new users
+block abusive users instantly
+
+Users must:
+
+be immediately logged out when suspended
+see clear reason for suspension
+not bypass restrictions
+
+---
+
+SECURITY GOAL
+
+No suspended user should be able to:
+
+access APIs
+continue scraping
+use credits
+
+All restrictions must be enforced server-side, not only in UI.

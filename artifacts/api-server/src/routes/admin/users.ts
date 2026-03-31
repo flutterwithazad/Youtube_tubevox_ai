@@ -78,6 +78,10 @@ router.post('/:id/suspend', async (req, res) => {
     const supabase = createSupabaseAdmin();
     const { reason } = req.body;
     await supabase.from('profiles').update({ is_suspended: true, account_status: 'suspended', suspended_reason: reason, suspended_at: new Date().toISOString(), suspended_by: admin.adminId }).eq('id', req.params.id);
+    // Invalidate all Supabase auth sessions immediately
+    await supabase.auth.admin.signOut(req.params.id, 'global');
+    // Also mark any tracked sessions as inactive
+    await supabase.from('user_sessions').update({ is_active: false, logged_out_at: new Date().toISOString() }).eq('user_id', req.params.id).eq('is_active', true);
     await logAdminAction({ adminId: admin.adminId, action: 'user.suspend', targetType: 'user', targetId: req.params.id, afterValue: { reason } });
     return res.json({ success: true });
   } catch (e: any) {

@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import { Play, Eye, EyeOff } from "lucide-react";
+import { usePlatformSettings } from "@/hooks/use-platform-settings";
 
 export default function Signup() {
   const [, setLocation] = useLocation();
@@ -12,9 +13,16 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailLoading, setEmailLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const { settings } = usePlatformSettings();
+
+  const signupsDisabled = settings !== null && !settings.new_signups_enabled;
 
   const handleEmailSignup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (signupsDisabled) {
+      toast.error("New registrations are currently disabled.");
+      return;
+    }
     try {
       setEmailLoading(true);
       const { error } = await supabase.auth.signUp({
@@ -46,6 +54,10 @@ export default function Signup() {
   };
 
   const handleGoogleSignup = async () => {
+    if (signupsDisabled) {
+      toast.error("New registrations are currently disabled.");
+      return;
+    }
     try {
       setGoogleLoading(true);
       const { error } = await supabase.auth.signInWithOAuth({
@@ -75,6 +87,12 @@ export default function Signup() {
             Start scraping YouTube comments in seconds
           </p>
         </div>
+
+        {signupsDisabled && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 font-medium text-center">
+            New registrations are currently disabled. Please check back later.
+          </div>
+        )}
 
         <div className="bg-card border border-border rounded-2xl shadow-xl shadow-black/5 px-8 py-8">
           <button

@@ -14,6 +14,8 @@ import Settings from "@/pages/settings";
 
 import { useAuth } from "@/hooks/use-auth";
 import { SuspendedScreen } from "@/components/SuspendedScreen";
+import { MaintenanceScreen } from "@/components/MaintenanceScreen";
+import { usePlatformSettings } from "@/hooks/use-platform-settings";
 import { useEffect } from "react";
 
 const queryClient = new QueryClient();
@@ -90,11 +92,31 @@ function Router() {
   );
 }
 
+function MaintenanceGate({ children }: { children: React.ReactNode }) {
+  const { settings, isLoading } = usePlatformSettings();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (settings?.maintenance_mode) {
+    return <MaintenanceScreen />;
+  }
+
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-        <Router />
+        <MaintenanceGate>
+          <Router />
+        </MaintenanceGate>
       </WouterRouter>
       <Toaster position="top-right" richColors />
     </QueryClientProvider>
