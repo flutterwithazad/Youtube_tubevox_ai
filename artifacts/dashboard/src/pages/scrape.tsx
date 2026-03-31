@@ -30,6 +30,14 @@ export default function Scrape() {
   const { user } = useAuth();
   const { balance, refetch: refetchBalance } = useCredits(user?.id);
 
+  const [freeCredits, setFreeCredits] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/public/settings")
+      .then(r => r.json())
+      .then(d => setFreeCredits(d.free_plan_credits ?? null))
+      .catch(() => {});
+  }, []);
+
   const [state, setState] = useState<ScrapeState>("input");
 
   // URL state
@@ -1091,6 +1099,11 @@ export default function Scrape() {
                       Get more →
                     </a>
                   </div>
+                )}
+                {freeCredits && balance < 1000 && (
+                  <p className="text-xs text-gray-400 mt-2 px-1 text-center">
+                    New users receive <span className="font-semibold">{Number(freeCredits).toLocaleString()}</span> free credits on signup
+                  </p>
                 )}
 
               </div>

@@ -30,8 +30,8 @@ export default function Signup() {
           .select("value")
           .eq("key", "free_plan_credits")
           .single();
-        const credits = setting?.value ?? "free";
-        toast.success(`Welcome! You have ${credits} credits to get started.`, { duration: 6000 });
+        const bonusAmount = Number(setting?.value ?? 500);
+        toast.success(`🎉 Welcome! You've received ${bonusAmount.toLocaleString()} free credits to get started.`, { duration: 6000 });
       } catch {
         toast.success("Account created! Welcome to YTScraper.", { duration: 4000 });
       }

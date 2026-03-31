@@ -1,0 +1,496 @@
+# YTScraper — Dynamic Signup Bonus Credits
+# Admin controls the number, it reflects everywhere instantly
+# Paste this into Replit Agent
+
+---
+
+## WHAT WE ARE BUILDING
+
+A single source of truth for the signup bonus credit amount:
+- Admin sets it in the admin panel → saves to `platform_settings` table
+- New users receive that exact amount on signup (via DB trigger)
+- Landing page, FAQ, pricing section, dashboard — all read it live from DB
+- If admin changes it from 500 to 1000 → everywhere updates automatically
+- No hardcoded numbers anywhere in the codebase
+
+---
+
+## THE DATA SOURCE
+
+The value already exists in `platform_settings` table:
+```
+key   = 'free_plan_credits'
+value = '500'   ← admin changes this number
+```
+
+This is the ONLY place the number lives.
+Every part of the app reads from here. Nothing is hardcoded.
+
+---
+
+## PART 1 — DATABASE: Ensure trigger uses dynamic value
+
+The `handle_new_user()` trigger runs when a user signs up.
+It must read `free_plan_credits` from `platform_settings` dynamically,
+NOT use a hardcoded number.
+
+Run this in Supabase SQL Editor to update the trigger:
+
+```sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_plan_id      UUID;
+  v_sub_id       UUID;
+  v_bonus_credits INT;
+BEGIN
+  -- ── 1. Get free plan ────────────────────────────────────────
+  SELECT id INTO v_plan_id
+  FROM public.plans
+  WHERE price_monthly = 0
+    AND is_active = true
+  ORDER BY created_at ASC
+  LIMIT 1;
+
+  -- ── 2. Insert profile ────────────────────────────────────────
+  INSERT INTO public.profiles (id, email, full_name)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', '')
+  );
+
+  -- ── 3. Create subscription on free plan ─────────────────────
+  IF v_plan_id IS NOT NULL THEN
+    INSERT INTO public.subscriptions (user_id, plan_id, status, billing_cycle)
+    VALUES (NEW.id, v_plan_id, 'active', 'monthly')
+    RETURNING id INTO v_sub_id;
+
+    UPDATE public.profiles
+    SET current_plan_id        = v_plan_id,
+        current_subscription_id = v_sub_id
+    WHERE id = NEW.id;
+  END IF;
+
+  -- ── 4. Read bonus amount DYNAMICALLY from platform_settings ──
+  -- NEVER hardcode this number
+  SELECT COALESCE(value::INT, 500)
+  INTO v_bonus_credits
+  FROM public.platform_settings
+  WHERE key = 'free_plan_credits';
+
+  -- Fallback to 500 if setting is missing or not a valid integer
+  IF v_bonus_credits IS NULL OR v_bonus_credits <= 0 THEN
+    v_bonus_credits := 500;
+  END IF;
+
+  -- ── 5. Grant signup bonus credits ───────────────────────────
+  INSERT INTO public.credit_ledger (
+    user_id,
+    amount,
+    source_type,
+    description,
+    balance_after
+  ) VALUES (
+    NEW.id,
+    v_bonus_credits,
+    'signup_bonus',
+    'Welcome bonus — ' || v_bonus_credits || ' free credits on signup',
+    v_bonus_credits
+  );
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+Verify the trigger is attached:
+```sql
+SELECT trigger_name, event_manipulation, event_object_table
+FROM information_schema.triggers
+WHERE trigger_name = 'on_auth_user_created';
+-- Should return 1 row
+```
+
+---
+
+## PART 2 — SHARED HOOK: usePlatformSetting
+
+Create one shared hook that any component can use to read any platform setting.
+This is the foundation — everything else uses this.
+
+```typescript
+// lib/hooks/usePlatformSetting.ts
+'use client'
+import { useEffect, useState, useCallback } from 'react'
+import { createClient } from '@/lib/supabase/client'
+
+export function usePlatformSetting(key: string): {
+  value: string | null
+  loading: boolean
+  refetch: () => Promise<void>
+} {
+  const [value, setValue] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const supabase = createClient()
+
+  const fetch = useCallback(async () => {
+    const { data } = await supabase
+      .from('platform_settings')
+      .select('value')
+      .eq('key', key)
+      .single()
+    setValue(data?.value ?? null)
+    setLoading(false)
+  }, [key])
+
+  useEffect(() => { fetch() }, [fetch])
+
+  return { value, loading, refetch: fetch }
+}
+```
+
+Also create a server-side helper for Server Components and API routes:
+
+```typescript
+// lib/server/getPlatformSetting.ts
+import { createClient } from '@/lib/supabase/server'
+
+export async function getPlatformSetting(key: string): Promise<string | null> {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('platform_settings')
+    .select('value')
+    .eq('key', key)
+    .single()
+  return data?.value ?? null
+}
+```
+
+---
+
+## PART 3 — LANDING PAGE
+
+The landing page needs to show the signup bonus in:
+1. Hero section: "Get X free credits when you sign up"
+2. Pricing section: Free plan shows "X credits/month"
+3. FAQ: "How many free credits do I get?"
+4. Any other place a number is currently hardcoded
+
+### 3a — Server-side fetch (preferred for landing page SEO)
+
+In `app/page.tsx` (the landing page Server Component), fetch the value once
+at the top and pass it down as a prop:
+
+```typescript
+// app/page.tsx
+import { getPlatformSetting } from '@/lib/server/getPlatformSetting'
+
+export default async function LandingPage() {
+  // Fetch dynamically — updates automatically when admin changes it
+  const signupBonus = await getPlatformSetting('free_plan_credits') ?? '500'
+
+  return (
+    <>
+      <HeroSection signupBonus={signupBonus} />
+      <PricingSection signupBonus={signupBonus} />
+      <FAQSection signupBonus={signupBonus} />
+      {/* pass to any section that shows the number */}
+    </>
+  )
+}
+```
+
+### 3b — Hero section usage
+
+Find every place in the hero section that shows a hardcoded credit number.
+Replace with the `signupBonus` prop:
+
+```tsx
+// BEFORE (hardcoded — NEVER do this):
+<p>Get 500 free credits when you sign up</p>
+<p>Free plan includes 500 comments</p>
+
+// AFTER (dynamic):
+<p>Get {signupBonus} free credits when you sign up</p>
+<p>Free plan includes {Number(signupBonus).toLocaleString()} comments</p>
+```
+
+### 3c — FAQ section usage
+
+Find the FAQ answer about free credits. Replace hardcoded number:
+
+```tsx
+// BEFORE:
+{
+  q: "Is there a free plan? Any limits?",
+  a: "Yes — the free plan gives you 500 credits every month..."
+}
+
+// AFTER:
+{
+  q: "Is there a free plan? Any limits?",
+  a: `Yes — the free plan gives you ${signupBonus} credits when you sign up. No credit card required.`
+}
+```
+
+### 3d — Pricing cards usage
+
+```tsx
+// Free tier card:
+<div className="plan-feature">
+  <CheckIcon />
+  <span>{Number(signupBonus).toLocaleString()} free credits on signup</span>
+</div>
+```
+
+---
+
+## PART 4 — DASHBOARD PAGES
+
+### 4a — Credits page
+
+The credits page shows "New users get X free credits on signup".
+Use the client-side hook:
+
+```tsx
+// In /dashboard/credits page component:
+import { usePlatformSetting } from '@/lib/hooks/usePlatformSetting'
+
+const { value: signupBonus, loading } = usePlatformSetting('free_plan_credits')
+
+// In the balance card:
+<p className="text-sm text-gray-500">
+  New users get{' '}
+  <span className="font-semibold text-gray-900">
+    {loading ? '...' : Number(signupBonus).toLocaleString()}
+  </span>{' '}
+  free credits on signup
+</p>
+```
+
+### 4b — Signup page welcome toast
+
+After signup, show how many credits they received.
+Read dynamically — do NOT hardcode:
+
+```typescript
+// After successful signup:
+const signupBonus = await supabase
+  .from('platform_settings')
+  .select('value')
+  .eq('key', 'free_plan_credits')
+  .single()
+
+const bonusAmount = Number(signupBonus.data?.value ?? 500)
+toast.success(
+  `🎉 Welcome! You've received ${bonusAmount.toLocaleString()} free credits to get started.`,
+  { duration: 6000 }
+)
+```
+
+### 4c — Scrape page
+
+Below the credit balance display, show the bonus info for new/low-credit users:
+
+```tsx
+{balance < 1000 && (
+  <p className="text-xs text-gray-400 mt-1">
+    New users receive {loading ? '...' : Number(signupBonus).toLocaleString()} free credits on signup
+  </p>
+)}
+```
+
+---
+
+## PART 5 — ADMIN PANEL: Edit signup bonus
+
+In the admin panel platform settings page (`/admin/settings`),
+the `free_plan_credits` key should have special UI treatment.
+
+Find the platform settings component and add this specific handling:
+
+```tsx
+// In the platform settings list, when rendering key = 'free_plan_credits':
+
+{setting.key === 'free_plan_credits' && (
+  <div className="flex items-start justify-between py-4 px-5 border-b border-gray-100">
+    <div className="flex-1">
+      {/* Key name */}
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-sm text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
+          free_plan_credits
+        </span>
+        <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+          Signup bonus
+        </span>
+      </div>
+
+      {/* Description */}
+      <p className="text-sm text-gray-500 mt-1">
+        Credits granted to every new user on signup.
+        Currently: <strong>{Number(setting.value).toLocaleString()} credits</strong>.
+        This number appears on the landing page, pricing, FAQ, and signup page automatically.
+      </p>
+
+      {/* Live preview */}
+      <p className="text-xs text-gray-400 mt-1">
+        If you change this to 1000, new signups will receive 1,000 credits
+        and the landing page will update immediately.
+      </p>
+    </div>
+
+    {/* Edit input */}
+    <div className="flex items-center gap-3 ml-6 flex-shrink-0">
+      <input
+        type="number"
+        min="0"
+        max="1000000"
+        step="100"
+        value={editValues[setting.key] ?? setting.value}
+        onChange={e => setEditValues(prev => ({ ...prev, [setting.key]: e.target.value }))}
+        className="w-28 text-right font-mono font-semibold border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 focus:border-transparent"
+      />
+      <span className="text-sm text-gray-500">credits</span>
+      <button
+        onClick={() => saveSetting(setting.key, editValues[setting.key] ?? setting.value)}
+        className="text-sm font-semibold text-white bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors"
+      >
+        Save
+      </button>
+    </div>
+  </div>
+)}
+```
+
+### Save handler in admin settings:
+
+```typescript
+const saveSetting = async (key: string, value: string) => {
+  // Validate: must be a positive integer for free_plan_credits
+  if (key === 'free_plan_credits') {
+    const n = parseInt(value)
+    if (isNaN(n) || n < 0) {
+      toast.error('Signup bonus must be a positive number')
+      return
+    }
+    if (n > 100000) {
+      toast.error('Signup bonus cannot exceed 100,000 credits')
+      return
+    }
+  }
+
+  // Save to DB
+  const response = await fetch(`/api/admin/settings/${key}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: String(value) }),
+  })
+
+  if (!response.ok) {
+    toast.error('Failed to save setting')
+    return
+  }
+
+  toast.success(
+    key === 'free_plan_credits'
+      ? `✓ Signup bonus updated to ${Number(value).toLocaleString()} credits. New signups will now receive this amount.`
+      : '✓ Setting saved'
+  )
+
+  // Refresh the settings list
+  await fetchSettings()
+}
+```
+
+---
+
+## PART 6 — FIND AND REPLACE ALL HARDCODED NUMBERS
+
+Search the ENTIRE codebase for any hardcoded credit amounts and replace them.
+
+**Search for these exact strings and replace each one:**
+
+```
+Search: "500 credits"        → Replace with dynamic value
+Search: "500 free"           → Replace with dynamic value
+Search: "> 500"              → Check context, may need to replace
+Search: "= 500"              → Check context, may need to replace
+Search: "=== 500"            → Check context, may need to replace
+Search: "credits: 500"       → Replace with dynamic value
+Search: "500 comment"        → Replace with dynamic value
+Search: `${500}`             → Replace with dynamic value
+Search: free_credits = 500   → Replace with dynamic value
+```
+
+For each match, replace the hardcoded `500` with a read from `platform_settings`.
+
+**The only place `500` should exist** is:
+1. In `platform_settings` table as the default VALUE
+2. As a fallback `?? 500` in case the DB read fails
+
+Everywhere else: read from DB.
+
+---
+
+## PART 7 — VERIFICATION
+
+After all changes, run these checks:
+
+### Check 1: Trigger uses dynamic value
+```sql
+-- Change the value temporarily
+UPDATE public.platform_settings
+SET value = '750'
+WHERE key = 'free_plan_credits';
+
+-- Sign up a test user and check their ledger:
+SELECT amount, description, source_type
+FROM public.credit_ledger
+WHERE source_type = 'signup_bonus'
+ORDER BY created_at DESC
+LIMIT 1;
+-- Should show amount = 750
+
+-- Change back
+UPDATE public.platform_settings
+SET value = '500'
+WHERE key = 'free_plan_credits';
+```
+
+### Check 2: Landing page shows correct number
+1. Go to landing page
+2. Check hero text / pricing / FAQ for the credit number
+3. Change value in admin panel to 1000
+4. Hard refresh landing page (Ctrl+Shift+R)
+5. ✓ Landing page should now show 1,000 everywhere
+
+### Check 3: Dashboard shows correct number
+1. Go to /dashboard/credits
+2. ✓ "New users get X free credits" shows correct value
+
+### Check 4: No hardcoded numbers remain
+```bash
+# Run in Replit shell to find any remaining hardcoded credit amounts:
+grep -r "500" --include="*.tsx" --include="*.ts" --include="*.jsx" --include="*.js" \
+  --exclude-dir=node_modules --exclude-dir=.next \
+  -l | head -20
+# Review each file — replace any credit-related 500s
+```
+
+---
+
+## SUMMARY
+
+| Where | Before | After |
+|-------|--------|-------|
+| DB trigger | Hardcoded 500 | Reads `platform_settings.free_plan_credits` |
+| Landing page hero | "500 free credits" | Reads from DB at build/render time |
+| Landing page FAQ | "500 credits" | Reads from DB |
+| Pricing card | "500 credits/month" | Reads from DB |
+| Signup toast | "500 credits" | Reads from DB |
+| Credits page | "500 free credits" | Reads from DB |
+| Admin panel | Plain text input | Number input with preview + validation |
+
+**One admin change → updates everywhere instantly.**
+No code deploys needed to change the signup bonus.
