@@ -20,20 +20,21 @@ export interface FetchFilters {
 }
 
 export interface Comment {
-  job_id:              string;
-  comment_id:          string;
-  author:              string;
-  author_channel:      string;
-  text:                string;
-  likes:               number;
-  published_at:        string;
-  updated_at:          string;
-  reply_count:         number;
-  is_reply:            boolean;
-  parent_id:           string | null;
-  liked_by_creator:    boolean;
-  is_pinned:           boolean;
-  is_paid:             boolean;
+  job_id:                string;
+  comment_id:            string;
+  author:                string;
+  author_channel:        string;
+  author_profile_image?: string;
+  text:                  string;
+  likes:                 number;
+  published_at:          string;
+  updated_at:            string;
+  reply_count:           number;
+  is_reply:              boolean;
+  parent_id:             string | null;
+  liked_by_creator:      boolean;
+  is_pinned:             boolean;
+  is_paid:               boolean;
 }
 
 export interface YouTubeApiResponse {

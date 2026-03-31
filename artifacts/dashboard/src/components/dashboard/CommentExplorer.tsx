@@ -681,8 +681,8 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
         {visibleFields.published     && <div>Published</div>}
         {visibleFields.author        && <div>Author</div>}
         <div>Comment</div>
-        {visibleFields.likes         && <div className="text-right">Likes</div>}
-        {visibleFields.replies       && <div className="text-right">Replies</div>}
+        {visibleFields.likes         && <div>Likes</div>}
+        {visibleFields.replies       && <div>Reply</div>}
         {visibleFields.heart         && <div className="text-center">Heart</div>}
         {visibleFields.pinned        && <div className="text-center">Pinned</div>}
         {visibleFields.paid          && <div className="text-center">Paid</div>}
@@ -720,64 +720,89 @@ export function CommentExplorer({ jobId, videoTitle, totalCount, isPartial, jobS
           <div>
             {displayedComments.slice(0, renderLimit).map((c) => {
               const key = c.comment_id || c.id;
-              const isExpanded = expandedRows.has(key);
               const initials = (c.author || "?").substring(0, 2).toUpperCase();
+              const GreenCheck = () => (
+                <svg className="w-4 h-4 text-emerald-500 mx-auto" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+              );
               return (
                 <div
                   key={key}
                   style={{ display: "grid", gridTemplateColumns: computedGridTemplate }}
-                  onClick={() => toggleExpand(key)}
-                  className={`gap-4 px-4 py-3 border-b border-border/50 hover:bg-red-50/50 cursor-pointer transition-colors ${c.is_reply ? "bg-secondary/20" : ""}`}
+                  className="gap-4 px-4 py-3 border-b border-border/40 hover:bg-muted/30 transition-colors"
                 >
-                  <div className="flex items-start pt-1 text-muted-foreground/40">
-                    {c.is_reply && <CornerDownRight className="w-4 h-4 ml-2" />}
+                  {/* Reply indicator */}
+                  <div className="flex items-center justify-center text-muted-foreground/30">
+                    {c.is_reply && <CornerDownRight className="w-3.5 h-3.5" />}
                   </div>
+
                   {visibleFields.published && (
-                    <div className="text-xs text-muted-foreground pt-1 truncate">
-                      {c.published_at ? formatDistanceToNow(new Date(c.published_at), { addSuffix: false }) : "N/A"}
+                    <div className="text-xs text-muted-foreground flex items-center">
+                      {c.published_at ? formatDistanceToNow(new Date(c.published_at), { addSuffix: false }) : "—"}
                     </div>
                   )}
+
                   {visibleFields.author && (
-                    <div className="flex items-start gap-2 pt-0.5 truncate pr-2">
+                    <div className="flex items-center gap-2 min-w-0 pr-2">
+                      {c.author_profile_image ? (
+                        <img
+                          src={c.author_profile_image}
+                          alt={c.author}
+                          className="w-7 h-7 rounded-full shrink-0 object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                            (e.target as HTMLImageElement).nextElementSibling?.classList.remove("hidden");
+                          }}
+                        />
+                      ) : null}
                       <div
-                        className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 shadow-sm"
+                        className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 ${c.author_profile_image ? "hidden" : ""}`}
                         style={{ backgroundColor: getAvatarColor(c.author) }}
                       >
                         {initials}
                       </div>
-                      <span className="text-sm font-medium text-foreground truncate">{c.author}</span>
+                      <span className="text-sm text-foreground truncate">{c.author}</span>
                     </div>
                   )}
-                  <div className="text-sm text-foreground pr-4 overflow-hidden">
-                    <p className={`whitespace-pre-wrap ${!isExpanded ? "line-clamp-2" : ""}`}>{c.text}</p>
+
+                  {/* Comment text — no line-clamp, wraps fully */}
+                  <div className="text-sm text-foreground leading-relaxed">
+                    <p className="whitespace-pre-wrap break-words">{c.text}</p>
                   </div>
+
                   {visibleFields.likes && (
-                    <div className="text-sm font-mono text-muted-foreground text-right pt-1">
+                    <div className="text-sm text-foreground flex items-center">
                       {(c.likes ?? 0).toLocaleString()}
                     </div>
                   )}
+
                   {visibleFields.replies && (
-                    <div className="text-sm font-mono text-muted-foreground/60 text-right pt-1">
-                      {c.reply_count > 0 ? c.reply_count : "-"}
+                    <div className="text-sm text-muted-foreground flex items-center">
+                      {c.reply_count > 0 ? c.reply_count.toLocaleString() : "—"}
                     </div>
                   )}
+
                   {visibleFields.heart && (
-                    <div className="text-center pt-1">
-                      {c.liked_by_creator ? <span title="Hearted by creator">❤️</span> : <span className="text-muted-foreground/30 text-xs">—</span>}
+                    <div className="flex items-center justify-center">
+                      {c.liked_by_creator ? <GreenCheck /> : null}
                     </div>
                   )}
+
                   {visibleFields.pinned && (
-                    <div className="text-center pt-1">
-                      {c.is_pinned ? <span title="Pinned comment">📌</span> : <span className="text-muted-foreground/30 text-xs">—</span>}
+                    <div className="flex items-center justify-center">
+                      {c.is_pinned ? <GreenCheck /> : null}
                     </div>
                   )}
+
                   {visibleFields.paid && (
-                    <div className="text-center pt-1">
-                      {c.is_paid ? <span title="Paid comment">💰</span> : <span className="text-muted-foreground/30 text-xs">—</span>}
+                    <div className="flex items-center justify-center">
+                      {c.is_paid ? <GreenCheck /> : null}
                     </div>
                   )}
+
                   {visibleFields.authorChannel && (
-                    <div className="text-xs text-muted-foreground pt-1 truncate">
+                    <div className="text-xs text-muted-foreground flex items-center truncate">
                       {c.author_channel ?? "—"}
                     </div>
                   )}

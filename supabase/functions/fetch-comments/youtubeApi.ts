@@ -131,20 +131,21 @@ export class YouTubeApi {
 
         const rs = item.snippet;
         replies.push({
-          job_id:            jobId,
-          comment_id:        item.id,
-          author:            rs.authorDisplayName  ?? "",
-          author_channel:    rs.authorChannelUrl   ?? "",
-          text:              rs.textDisplay        ?? rs.textOriginal ?? "",
-          likes:             rs.likeCount          ?? 0,
-          published_at:      rs.publishedAt,
-          updated_at:        rs.updatedAt,
-          reply_count:       0,
-          is_reply:          true,
-          parent_id:         parentId,
-          liked_by_creator:  rs.likedByCreator     ?? false,
-          is_pinned:         false,
-          is_paid:           false,
+          job_id:                jobId,
+          comment_id:            item.id,
+          author:                rs.authorDisplayName    ?? "",
+          author_channel:        rs.authorChannelUrl     ?? "",
+          author_profile_image:  rs.authorProfileImageUrl ?? null,
+          text:                  rs.textDisplay          ?? rs.textOriginal ?? "",
+          likes:                 rs.likeCount            ?? 0,
+          published_at:          rs.publishedAt,
+          updated_at:            rs.updatedAt,
+          reply_count:           0,
+          is_reply:              true,
+          parent_id:             parentId,
+          liked_by_creator:      rs.likedByCreator       ?? false,
+          is_pinned:             false,
+          is_paid:               false,
         });
       }
 
@@ -236,20 +237,21 @@ export class YouTubeApi {
         const comments: Comment[] = [];
 
         comments.push({
-          job_id:            jobId,
-          comment_id:        item.id,
-          author:            top.authorDisplayName  ?? "",
-          author_channel:    top.authorChannelUrl   ?? "",
-          text:              top.textDisplay        ?? top.textOriginal ?? "",
-          likes:             top.likeCount          ?? 0,
-          published_at:      top.publishedAt,
-          updated_at:        top.updatedAt,
-          reply_count:       item.snippet.totalReplyCount ?? 0,
-          is_reply:          false,
-          parent_id:         null,
-          liked_by_creator:  top.likedByCreator     ?? false,
-          is_pinned:         false,
-          is_paid:           false,
+          job_id:                jobId,
+          comment_id:            item.id,
+          author:                top.authorDisplayName    ?? "",
+          author_channel:        top.authorChannelUrl     ?? "",
+          author_profile_image:  top.authorProfileImageUrl ?? null,
+          text:                  top.textDisplay          ?? top.textOriginal ?? "",
+          likes:                 top.likeCount            ?? 0,
+          published_at:          top.publishedAt,
+          updated_at:            top.updatedAt,
+          reply_count:           item.snippet.totalReplyCount ?? 0,
+          is_reply:              false,
+          parent_id:             null,
+          liked_by_creator:      top.likedByCreator       ?? false,
+          is_pinned:             false,
+          is_paid:               false,
         });
 
         const totalReplies = item.snippet.totalReplyCount ?? 0;
