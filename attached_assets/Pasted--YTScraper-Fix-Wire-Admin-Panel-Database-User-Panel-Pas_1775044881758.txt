@@ -1,0 +1,811 @@
+# YTScraper — Fix: Wire Admin Panel → Database → User Panel
+# Paste this into Replit Agent
+#
+# PROBLEM: Maintenance mode toggle in admin panel does nothing to users.
+# Suspension works but maintenance mode does not.
+#
+# APPROACH: Do NOT guess. Run every diagnostic step first,
+# then apply fixes based on what's actually broken.
+# Test each fix immediately after applying it.
+
+---
+
+## UNDERSTAND THE FULL CHAIN
+
+For maintenance mode to work, ALL of these must be true:
+
+  [Admin toggle click]
+       ↓
+  [Admin panel saves to DB]        ← platform_settings WHERE key='maintenance_mode'
+       ↓
+  [DB value = 'true']              ← verify this in Supabase SQL Editor
+       ↓
+  [Next.js middleware reads DB]    ← runs on every user request
+       ↓
+  [Middleware redirects to /maintenance]
+       ↓
+  [User sees maintenance page]
+
+If ANY step in this chain is broken, the feature doesn't work.
+We will test and fix each step individually.
+
+---
+
+## DIAGNOSTIC STEP 1 — Check what's actually in the database
+
+Run in Supabase SQL Editor RIGHT NOW:
+
+```sql
+SELECT key, value, description, updated_at
+FROM public.platform_settings
+WHERE key IN ('maintenance_mode', 'new_signups_enabled')
+ORDER BY key;
+```
+
+**What to look for:**
+- If 0 rows → settings don't exist in DB at all → go to Fix A
+- If rows exist but value is still 'false' after you toggled ON → admin panel save is broken → go to Fix B
+- If value IS 'true' but users still get in → middleware is broken → go to Fix C
+
+---
+
+## DIAGNOSTIC STEP 2 — Check if admin panel is actually saving
+
+In the admin panel, open browser DevTools → Network tab → toggle the maintenance mode switch.
+
+Look for an outgoing request. You should see one of:
+- `PATCH /api/admin/settings/maintenance_mode` → check response status
+- `POST /api/admin/settings` → check request body
+- No request at all → the save function is not wired up
+
+**If no network request appears when you toggle** → the toggle onChange handler is missing or broken → Fix B.
+**If a request appears but returns 4xx/5xx** → the API route has an error → Fix B.
+**If a request appears and returns 200** → DB should be updated → re-run Diagnostic 1.
+
+---
+
+## DIAGNOSTIC STEP 3 — Check if middleware is reading from DB
+
+Add a temporary log to middleware.ts to confirm it's running and reading correctly.
+Find `middleware.ts` in the user panel (Next.js app) and add at the very top:
+
+```typescript
+export async function middleware(request: NextRequest) {
+  console.log('[MIDDLEWARE] Path:', request.nextUrl.pathname)
+  // ... rest of middleware
+```
+
+And inside the maintenance check block:
+```typescript
+  const { data: setting } = await supabase
+    .from('platform_settings')
+    .select('value')
+    .eq('key', 'maintenance_mode')
+    .single()
+
+  console.log('[MIDDLEWARE] maintenance_mode value from DB:', setting?.value)
+  console.log('[MIDDLEWARE] will redirect?', setting?.value === 'true')
+```
+
+Then check the Replit console/logs when a user visits the app.
+- If you see `[MIDDLEWARE]` logs → middleware is running
+- If maintenance value shows 'false' despite DB having 'true' → Supabase client in middleware has wrong credentials or is reading from cache
+- If no middleware logs at all → the middleware matcher is wrong and it's not running
+
+---
+
+## FIX A — Create the platform_settings rows if missing
+
+Run in Supabase SQL Editor:
+
+```sql
+-- Create the rows with safe defaults
+INSERT INTO public.platform_settings (key, value, description)
+VALUES
+  ('maintenance_mode',   'false', 'When true, all non-admin users see the maintenance page'),
+  ('new_signups_enabled', 'true', 'When false, new user registration is blocked')
+ON CONFLICT (key) DO NOTHING;
+
+-- Verify
+SELECT key, value FROM public.platform_settings
+WHERE key IN ('maintenance_mode', 'new_signups_enabled');
+```
+
+---
+
+## FIX B — Admin panel: wire both toggles to actually save to DB
+
+This is the most likely root cause. The admin panel UI exists but the
+save function is probably either not calling an API or the API route
+doesn't exist.
+
+### B1: Create the admin API route to save settings
+
+This project uses Express.js for the admin backend.
+Find the admin API routes file (likely `server/routes/admin.js` or similar).
+Add these two routes:
+
+```javascript
+// GET /api/admin/settings — load all platform settings
+router.get('/settings', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('platform_settings')
+      .select('key, value, description, updated_at')
+      .order('key')
+
+    if (error) throw error
+    res.json({ settings: data })
+  } catch (err) {
+    console.error('[ADMIN] GET /settings error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// PATCH /api/admin/settings/:key — update one setting
+router.patch('/settings/:key', requireAdmin, async (req, res) => {
+  const { key }   = req.params
+  const { value } = req.body
+
+  // Whitelist allowed keys
+  const ALLOWED_KEYS = [
+    'maintenance_mode',
+    'new_signups_enabled',
+    'free_plan_credits',
+  ]
+  if (!ALLOWED_KEYS.includes(key)) {
+    return res.status(400).json({ error: `Unknown setting key: ${key}` })
+  }
+
+  // Validate values per key
+  if (key === 'maintenance_mode' || key === 'new_signups_enabled') {
+    if (value !== 'true' && value !== 'false') {
+      return res.status(400).json({ error: 'Value must be "true" or "false"' })
+    }
+  }
+
+  try {
+    const { error } = await supabaseAdmin
+      .from('platform_settings')
+      .upsert(
+        {
+          key,
+          value: String(value),
+          updated_at: new Date().toISOString(),
+          updated_by: req.admin?.id ?? null,
+        },
+        { onConflict: 'key' }
+      )
+
+    if (error) throw error
+
+    console.log(`[ADMIN] Setting updated: ${key} = ${value} by admin ${req.admin?.email}`)
+    res.json({ success: true, key, value })
+  } catch (err) {
+    console.error('[ADMIN] PATCH /settings/:key error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+```
+
+### B2: Wire the admin panel toggle UI to call this API
+
+Find the admin settings page component. Find the maintenance mode toggle.
+Replace whatever onClick/onChange it has with this exact implementation:
+
+```typescript
+// State for both toggles
+const [maintenanceMode, setMaintenanceMode] = useState(false)
+const [signupsEnabled,  setSignupsEnabled]  = useState(true)
+const [saving, setSaving] = useState<string | null>(null)
+
+// Load current values when page mounts
+useEffect(() => {
+  loadSettings()
+}, [])
+
+const loadSettings = async () => {
+  try {
+    const res = await fetch('/api/admin/settings', {
+      credentials: 'include',
+    })
+    if (!res.ok) throw new Error('Failed to load settings')
+    const { settings } = await res.json()
+
+    const maintenance = settings.find((s: any) => s.key === 'maintenance_mode')
+    const signups     = settings.find((s: any) => s.key === 'new_signups_enabled')
+
+    setMaintenanceMode(maintenance?.value === 'true')
+    setSignupsEnabled(signups?.value !== 'false') // default true if missing
+  } catch (err) {
+    console.error('Failed to load settings:', err)
+    toast.error('Failed to load platform settings')
+  }
+}
+
+const updateSetting = async (key: string, value: string): Promise<boolean> => {
+  setSaving(key)
+  try {
+    const res = await fetch(`/api/admin/settings/${key}`, {
+      method:      'PATCH',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify({ value }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? 'Save failed')
+    return true
+  } catch (err: any) {
+    toast.error(`Failed to save setting: ${err.message}`)
+    return false
+  } finally {
+    setSaving(null)
+  }
+}
+
+// Maintenance mode toggle handler
+const handleMaintenanceToggle = async (checked: boolean) => {
+  // Optimistic update
+  setMaintenanceMode(checked)
+
+  const saved = await updateSetting('maintenance_mode', checked ? 'true' : 'false')
+
+  if (saved) {
+    toast.success(
+      checked
+        ? '⚠ Maintenance mode is now ON — users cannot access the app'
+        : '✓ Maintenance mode is OFF — app is back online',
+      { duration: 5000 }
+    )
+  } else {
+    // Revert optimistic update if save failed
+    setMaintenanceMode(!checked)
+  }
+}
+
+// Signups toggle handler
+const handleSignupsToggle = async (checked: boolean) => {
+  setSignupsEnabled(checked)
+
+  const saved = await updateSetting('new_signups_enabled', checked ? 'true' : 'false')
+
+  if (saved) {
+    toast.success(
+      checked
+        ? '✓ New signups are now open'
+        : '⚠ New signups are now CLOSED — registration blocked'
+    )
+  } else {
+    setSignupsEnabled(!checked)
+  }
+}
+```
+
+Render the toggles with loading state:
+```tsx
+{/* Maintenance Mode Toggle */}
+<div className="flex items-center justify-between py-5 px-6 border-b border-gray-100">
+  <div className="flex-1 pr-8">
+    <div className="flex items-center gap-2">
+      <p className="text-sm font-semibold text-gray-900">Maintenance mode</p>
+      {maintenanceMode && (
+        <span className="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">
+          ACTIVE
+        </span>
+      )}
+    </div>
+    <p className="text-xs text-gray-500 mt-0.5">
+      When ON, all users see a maintenance page. Admin panel still works normally.
+    </p>
+  </div>
+  <div className="flex items-center gap-3">
+    {saving === 'maintenance_mode' && (
+      <div className="w-4 h-4 border-2 border-gray-300 border-t-red-500 rounded-full animate-spin" />
+    )}
+    <Switch
+      checked={maintenanceMode}
+      onCheckedChange={handleMaintenanceToggle}
+      disabled={saving === 'maintenance_mode'}
+    />
+  </div>
+</div>
+
+{/* New Signups Toggle */}
+<div className="flex items-center justify-between py-5 px-6 border-b border-gray-100">
+  <div className="flex-1 pr-8">
+    <div className="flex items-center gap-2">
+      <p className="text-sm font-semibold text-gray-900">New signups enabled</p>
+      {!signupsEnabled && (
+        <span className="text-[11px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+          CLOSED
+        </span>
+      )}
+    </div>
+    <p className="text-xs text-gray-500 mt-0.5">
+      When OFF, the registration page shows a "closed" message. Existing users unaffected.
+    </p>
+  </div>
+  <div className="flex items-center gap-3">
+    {saving === 'new_signups_enabled' && (
+      <div className="w-4 h-4 border-2 border-gray-300 border-t-red-500 rounded-full animate-spin" />
+    )}
+    <Switch
+      checked={signupsEnabled}
+      onCheckedChange={handleSignupsToggle}
+      disabled={saving === 'new_signups_enabled'}
+    />
+  </div>
+</div>
+```
+
+### B3: Verify the save is working
+
+After wiring, toggle maintenance mode ON in the admin panel.
+Immediately run in Supabase SQL Editor:
+
+```sql
+SELECT key, value, updated_at
+FROM public.platform_settings
+WHERE key = 'maintenance_mode';
+```
+
+Value must be `'true'`. If it is → Fix B worked. Move to Fix C.
+If still `'false'` → check the Network tab in admin panel DevTools for error.
+
+---
+
+## FIX C — User panel middleware: read maintenance mode from DB correctly
+
+This is where the enforcement happens. The Next.js middleware in the
+USER PANEL (not admin panel) must read from `platform_settings` on
+every request and redirect to /maintenance if value is 'true'.
+
+Find `middleware.ts` in the user panel Next.js app.
+Replace it entirely with this exact code:
+
+```typescript
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse }       from 'next/server'
+import type { NextRequest }   from 'next/server'
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+
+  // These paths are never blocked by maintenance mode or auth checks
+  const ALWAYS_ALLOW = [
+    '/maintenance',
+    '/auth',
+    '/_next',
+    '/favicon.ico',
+    '/api/health',
+  ]
+
+  const isAlwaysAllowed = ALWAYS_ALLOW.some(p => pathname.startsWith(p))
+  const isAdminRoute    = pathname.startsWith('/admin')
+  const isStaticFile    = /\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|woff|woff2)$/.test(pathname)
+
+  if (isStaticFile) return NextResponse.next({ request })
+
+  // Build response object we'll mutate for cookie handling
+  let response = NextResponse.next({ request })
+
+  // Create Supabase client with cookie handling
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          )
+          response = NextResponse.next({ request })
+          cookiesToSet.forEach(({ name, value, options }) =>
+            response.cookies.set(name, value, options)
+          )
+        },
+      },
+    }
+  )
+
+  // ════════════════════════════════════════════════════
+  // CHECK 1: MAINTENANCE MODE
+  // Applies to: all routes EXCEPT admin, /maintenance, static files
+  // ════════════════════════════════════════════════════
+  if (!isAdminRoute && !isAlwaysAllowed) {
+    try {
+      const { data: setting, error } = await supabase
+        .from('platform_settings')
+        .select('value')
+        .eq('key', 'maintenance_mode')
+        .single()
+
+      console.log(
+        `[MW] ${pathname} | maintenance_mode=${setting?.value} | error=${error?.message ?? 'none'}`
+      )
+
+      if (setting?.value === 'true') {
+        console.log(`[MW] Redirecting ${pathname} → /maintenance`)
+        return NextResponse.redirect(new URL('/maintenance', request.url))
+      }
+    } catch (err: any) {
+      // If DB is unreachable, let users through (fail open) — don't block everyone
+      console.error('[MW] Failed to check maintenance_mode:', err.message)
+    }
+  }
+
+  // ════════════════════════════════════════════════════
+  // CHECK 2: AUTH — get current user
+  // ════════════════════════════════════════════════════
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+
+  if (authError) {
+    console.log('[MW] Auth error:', authError.message)
+  }
+
+  // Protect /dashboard routes — redirect to login if not authenticated
+  if (!user && pathname.startsWith('/dashboard')) {
+    const loginUrl = new URL('/login', request.url)
+    loginUrl.searchParams.set('next', pathname)
+    return NextResponse.redirect(loginUrl)
+  }
+
+  // Redirect logged-in users away from login/signup pages
+  if (user && (pathname === '/login' || pathname === '/signup')) {
+    return NextResponse.redirect(new URL('/dashboard/scrape', request.url))
+  }
+
+  // ════════════════════════════════════════════════════
+  // CHECK 3: SUSPENSION — check profile on every dashboard request
+  // ════════════════════════════════════════════════════
+  if (user && pathname.startsWith('/dashboard')) {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_suspended, suspended_reason, account_status')
+        .eq('id', user.id)
+        .single()
+
+      console.log(
+        `[MW] User ${user.id} | is_suspended=${profile?.is_suspended} | status=${profile?.account_status}`
+      )
+
+      const isSuspended =
+        profile?.is_suspended === true ||
+        profile?.account_status === 'suspended'
+
+      if (isSuspended) {
+        // Sign out
+        await supabase.auth.signOut()
+
+        // Redirect to login with reason
+        const loginUrl = new URL('/login', request.url)
+        loginUrl.searchParams.set('suspended', 'true')
+        if (profile?.suspended_reason) {
+          loginUrl.searchParams.set(
+            'reason',
+            encodeURIComponent(profile.suspended_reason)
+          )
+        }
+        console.log(`[MW] Suspended user ${user.id} → redirecting to login`)
+        return NextResponse.redirect(loginUrl)
+      }
+    } catch (err: any) {
+      console.error('[MW] Failed to check suspension:', err.message)
+    }
+  }
+
+  // ════════════════════════════════════════════════════
+  // CHECK 4: NEW SIGNUPS — block /signup if disabled
+  // ════════════════════════════════════════════════════
+  if (pathname === '/signup') {
+    try {
+      const { data: setting } = await supabase
+        .from('platform_settings')
+        .select('value')
+        .eq('key', 'new_signups_enabled')
+        .single()
+
+      if (setting?.value === 'false') {
+        console.log('[MW] Signups disabled → redirecting /signup → /registration-closed')
+        return NextResponse.redirect(new URL('/registration-closed', request.url))
+      }
+    } catch {
+      // fail open
+    }
+  }
+
+  return response
+}
+
+export const config = {
+  matcher: [
+    /*
+     * Match ALL paths except:
+     * - _next/static (static files)
+     * - _next/image (image optimization)
+     * - favicon.ico
+     * - image files
+     */
+    '/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
+}
+```
+
+---
+
+## FIX D — Create the /maintenance page in the USER PANEL
+
+Create `app/maintenance/page.tsx` in the Next.js user panel:
+
+```tsx
+// app/maintenance/page.tsx
+// Standalone page - no auth, no sidebar, no layout wrapper
+
+export default function MaintenancePage() {
+  return (
+    <html>
+      <body>
+        <div
+          style={{
+            minHeight: '100vh',
+            background: '#0a0a0f',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+            fontFamily: 'DM Sans, sans-serif',
+          }}
+        >
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 48 }}>
+            <div
+              style={{
+                width: 40, height: 40,
+                background: '#e63946',
+                borderRadius: 12,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <svg width="20" height="20" fill="white" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+            </div>
+            <span style={{ color: 'white', fontSize: 20, fontWeight: 700, fontFamily: 'Syne, sans-serif' }}>
+              YTScraper
+            </span>
+          </div>
+
+          {/* Icon */}
+          <div
+            style={{
+              width: 72, height: 72,
+              background: 'rgba(245,158,11,0.1)',
+              borderRadius: 20,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              marginBottom: 28,
+            }}
+          >
+            <svg width="36" height="36" fill="none" stroke="#f59e0b" strokeWidth="1.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.336l-3.276 3.277a3.004 3.004 0 0 1-2.25-2.25l3.276-3.276a4.5 4.5 0 0 0-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437 1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008Z" />
+            </svg>
+          </div>
+
+          {/* Text */}
+          <h1
+            style={{
+              color: 'white', fontSize: 32, fontWeight: 700,
+              fontFamily: 'Syne, sans-serif', marginBottom: 12, textAlign: 'center',
+            }}
+          >
+            We'll be right back
+          </h1>
+          <p
+            style={{
+              color: '#9ca3af', fontSize: 16, textAlign: 'center',
+              maxWidth: 420, lineHeight: 1.6, marginBottom: 8,
+            }}
+          >
+            YTScraper is undergoing scheduled maintenance.
+            We're making improvements to serve you better.
+          </p>
+          <p style={{ color: '#6b7280', fontSize: 14, textAlign: 'center' }}>
+            This usually takes just a few minutes.
+          </p>
+
+          {/* Status pill */}
+          <div
+            style={{
+              marginTop: 40,
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: '#111827',
+              border: '1px solid #1f2937',
+              borderRadius: 999,
+              padding: '8px 20px',
+            }}
+          >
+            <div
+              style={{
+                width: 8, height: 8,
+                background: '#f59e0b',
+                borderRadius: '50%',
+                animation: 'pulse 2s infinite',
+              }}
+            />
+            <span style={{ color: '#9ca3af', fontSize: 14 }}>Maintenance in progress</span>
+          </div>
+
+          <p style={{ color: '#374151', fontSize: 12, marginTop: 48 }}>
+            © {new Date().getFullYear()} YTScraper
+          </p>
+        </div>
+      </body>
+    </html>
+  )
+}
+```
+
+---
+
+## FIX E — Create /registration-closed page
+
+Create `app/registration-closed/page.tsx`:
+
+```tsx
+export default function RegistrationClosedPage() {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-2xl border border-gray-200 shadow-sm p-8 text-center">
+        <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
+          <svg className="w-7 h-7 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </svg>
+        </div>
+        <h2 className="text-xl font-bold text-gray-900 mb-2">
+          Registration is closed
+        </h2>
+        <p className="text-gray-500 text-sm leading-relaxed mb-6">
+          We're not accepting new accounts at the moment.
+          Please check back soon or contact us if you need access.
+        </p>
+        <a
+          href="/login"
+          className="block w-full bg-red-600 hover:bg-red-700 text-white font-medium rounded-xl px-4 py-2.5 text-sm transition-colors text-center"
+        >
+          Already have an account? Log in
+        </a>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## FIX F — Admin panel: show red warning banner when maintenance is ON
+
+In the admin panel layout (the component that wraps all admin pages),
+add this banner at the very top so the admin knows maintenance is active:
+
+```tsx
+// In admin layout component — add this ABOVE the sidebar/content:
+import { useEffect, useState } from 'react'
+
+const [maintenanceActive, setMaintenanceActive] = useState(false)
+
+useEffect(() => {
+  // Poll every 30 seconds to keep banner in sync
+  const check = async () => {
+    const res = await fetch('/api/admin/settings', { credentials: 'include' })
+    if (!res.ok) return
+    const { settings } = await res.json()
+    const m = settings?.find((s: any) => s.key === 'maintenance_mode')
+    setMaintenanceActive(m?.value === 'true')
+  }
+  check()
+  const interval = setInterval(check, 30000)
+  return () => clearInterval(interval)
+}, [])
+
+// Render above everything else in admin layout:
+{maintenanceActive && (
+  <div className="bg-red-600 text-white text-sm font-medium px-4 py-2.5 flex items-center justify-between">
+    <div className="flex items-center gap-2">
+      <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+        <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+      </svg>
+      <span>MAINTENANCE MODE IS ON — All users are seeing the maintenance page</span>
+    </div>
+    <button
+      onClick={async () => {
+        await fetch('/api/admin/settings/maintenance_mode', {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: 'false' }),
+        })
+        setMaintenanceActive(false)
+      }}
+      className="text-white underline hover:no-underline font-semibold text-sm ml-4 flex-shrink-0"
+    >
+      Turn OFF →
+    </button>
+  </div>
+)}
+```
+
+---
+
+## TEST PROCEDURE — Run these in order after all fixes are applied
+
+### TEST 1: Verify DB save works
+1. Go to admin panel → Settings
+2. Toggle "Maintenance mode" ON
+3. Immediately run in Supabase SQL Editor:
+   ```sql
+   SELECT key, value, updated_at FROM platform_settings WHERE key = 'maintenance_mode';
+   ```
+4. ✅ Must show `value = 'true'` and a recent `updated_at`
+5. If still 'false' → Fix B is not applied correctly → recheck API route
+
+### TEST 2: Verify middleware blocks users
+1. After TEST 1 confirms DB value is 'true'
+2. Open a NEW INCOGNITO tab
+3. Navigate to your app URL (e.g. https://yourapp.replit.app/dashboard/scrape)
+4. ✅ Must redirect to /maintenance page
+5. If still shows dashboard → Fix C (middleware) is not applied → check middleware.ts
+
+### TEST 3: Verify admin panel is NOT blocked
+1. While maintenance mode is ON
+2. Navigate to your admin panel URL
+3. ✅ Admin panel must still work normally
+
+### TEST 4: Verify maintenance OFF works
+1. In admin panel, toggle maintenance mode OFF
+2. Refresh the incognito tab from TEST 2
+3. ✅ Should show the normal app again
+
+### TEST 5: Verify signup blocking
+1. Toggle "New signups enabled" OFF in admin panel
+2. Open incognito → navigate to /signup
+3. ✅ Should see "Registration is closed" page
+4. Toggle back ON → /signup works again
+
+### TEST 6: Check Replit logs during maintenance mode
+Open the Replit console while a user visits the app.
+You should see middleware logs like:
+```
+[MW] /dashboard/scrape | maintenance_mode=true | error=none
+[MW] Redirecting /dashboard/scrape → /maintenance
+```
+If you see these logs → middleware is running and reading DB correctly.
+If no logs → middleware is not running → check the matcher config.
+```
+
+---
+
+## COMMON MISTAKES TO CHECK
+
+1. **Middleware is in admin panel instead of user panel** — maintenance_mode must be
+   enforced in the USER PANEL Next.js middleware.ts, not the admin panel.
+
+2. **Middleware matcher is too narrow** — if matcher only covers `/dashboard/*`,
+   then visiting `/` or `/login` won't be blocked. Use the broad matcher above.
+
+3. **Admin panel uses different base URL** — if admin panel calls
+   `/api/admin/settings` but the route is actually `/admin/api/settings`,
+   the save fails silently. Check the exact route paths.
+
+4. **Supabase environment variables missing in user panel** — middleware needs
+   `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+   Check these are set in Replit Secrets for the user panel.
+
+5. **The maintenance page itself triggers middleware** — the `/maintenance` path
+   must be in the ALWAYS_ALLOW list, otherwise it creates an infinite redirect loop.

@@ -13,8 +13,7 @@ export function usePlatformSettings() {
 
   async function fetchSettings() {
     try {
-      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
-      const res = await fetch(`${base}/api/public/settings`);
+      const res = await fetch("/api/public/settings");
       if (!res.ok) return;
       const data = await res.json();
       setSettings({
