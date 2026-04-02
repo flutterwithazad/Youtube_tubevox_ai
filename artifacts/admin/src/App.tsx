@@ -16,6 +16,7 @@ import AnnouncementsPage from '@/pages/AnnouncementsPage';
 import IpBlocklistPage from '@/pages/IpBlocklistPage';
 import AuditLogPage from '@/pages/AuditLogPage';
 import AdminsPage from '@/pages/AdminsPage';
+import SocialLinksPage from '@/pages/SocialLinksPage';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
@@ -48,6 +49,7 @@ function AppRoutes() {
       <Route path="/ip-blocklist" component={IpBlocklistPage} />
       <Route path="/audit-log" component={AuditLogPage} />
       <Route path="/admins" component={AdminsPage} />
+      <Route path="/social-links" component={SocialLinksPage} />
       <Route component={RedirectToDefault} />
     </Switch>
   );

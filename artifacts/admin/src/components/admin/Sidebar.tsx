@@ -3,7 +3,7 @@ import { useAuth } from '@/lib/auth-context';
 import {
   LayoutDashboard, Users, Play, CreditCard, Package, Coins,
   Key, Settings, Megaphone, Shield, ClipboardList, UserCog, LogOut,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Share2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
@@ -38,7 +38,8 @@ const navGroups = [
       { label: 'YT API Keys', href: '/api-keys', icon: Key, perm: 'can_manage_api_keys' },
       { label: 'Platform Settings', href: '/settings', icon: Settings, perm: 'can_edit_settings' },
       { label: 'Announcements', href: '/announcements', icon: Megaphone, perm: 'can_manage_announcements' },
-      { label: 'IP Blocklist', href: '/ip-blocklist', icon: Shield, perm: 'can_manage_ip_blocklist' }
+      { label: 'IP Blocklist', href: '/ip-blocklist', icon: Shield, perm: 'can_manage_ip_blocklist' },
+      { label: 'Social Links', href: '/social-links', icon: Share2, perm: 'can_edit_settings' }
     ]
   },
   {

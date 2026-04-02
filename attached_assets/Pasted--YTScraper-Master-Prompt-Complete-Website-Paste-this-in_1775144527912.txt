@@ -1,0 +1,1349 @@
+# YTScraper — Master Prompt: Complete Website
+# Paste this into Replit Agent
+#
+# This prompt completes the entire public-facing website:
+# - All missing pages (Terms, Privacy, Contact, About, Refunds, Blog index)
+# - Footer with working links
+# - Dynamic social links (admin-controlled)
+# - Dynamic contact info (admin-controlled)
+# - Database tables for social links and contact info
+# - Admin panel sections to manage them
+#
+# DO NOT touch: /dashboard/*, /admin/* existing pages, edge functions
+
+---
+
+## WHAT EXISTS ALREADY
+
+- Homepage at / (app/page.tsx) — already built with all sections
+- Dashboard at /dashboard/* — fully built, do not touch
+- Admin panel at /admin/* — already has settings page
+- Supabase DB with platform_settings table (key/value store)
+- Design system: Syne (headings) + DM Sans (body) + JetBrains Mono (data)
+- Colors: #E63946 red accent, #0A0A0F dark, #F9FAFB light bg
+
+---
+
+## STEP 1 — DATABASE: Add tables for social links and contact info
+
+Run in Supabase SQL Editor:
+
+```sql
+-- ─────────────────────────────────────────
+-- Social links table
+-- Admin can add/edit/delete any social platform
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.social_links (
+  id         UUID    PRIMARY KEY DEFAULT uuid_generate_v4(),
+  platform   TEXT    NOT NULL,          -- e.g. "Twitter", "YouTube", "LinkedIn"
+  url        TEXT    NOT NULL,          -- full URL
+  icon_key   TEXT    NOT NULL,          -- key to identify which icon to show: twitter|youtube|linkedin|instagram|facebook|github|tiktok
+  is_active  BOOLEAN DEFAULT TRUE,
+  sort_order INT     DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Seed default social links (edit URLs after)
+INSERT INTO public.social_links (platform, url, icon_key, sort_order) VALUES
+  ('Twitter/X',  'https://twitter.com/ytscraper',   'twitter',   1),
+  ('YouTube',    'https://youtube.com/@ytscraper',  'youtube',   2),
+  ('LinkedIn',   'https://linkedin.com/company/ytscraper', 'linkedin', 3)
+ON CONFLICT DO NOTHING;
+
+-- ─────────────────────────────────────────
+-- Contact info stored in platform_settings
+-- Uses existing key/value table
+-- ─────────────────────────────────────────
+INSERT INTO public.platform_settings (key, value, description) VALUES
+  ('contact_email',   'support@ytscraper.com',     'Support email shown on contact page'),
+  ('contact_phone',   '+1 (555) 000-0000',         'Phone number shown on contact page'),
+  ('contact_address', '123 SaaS Street, San Francisco, CA 94102, USA', 'Address shown on contact page'),
+  ('contact_hours',   'Monday–Friday, 9am–6pm PST', 'Business hours shown on contact page'),
+  ('twitter_url',     'https://twitter.com/ytscraper',  'Twitter/X profile URL'),
+  ('company_name',    'YTScraper Inc.',             'Legal company name used in Terms/Privacy'),
+  ('company_email',   'legal@ytscraper.com',        'Legal email for Terms/Privacy pages')
+ON CONFLICT (key) DO NOTHING;
+
+-- RLS: allow public read on social_links (no auth needed for footer)
+ALTER TABLE public.social_links ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can read active social links"
+  ON public.social_links FOR SELECT
+  USING (is_active = TRUE);
+
+CREATE POLICY "Service role can manage social links"
+  ON public.social_links FOR ALL
+  USING (TRUE)
+  WITH CHECK (TRUE);
+```
+
+---
+
+## STEP 2 — SHARED DATA FETCHING UTILITIES
+
+Create these server-side utilities used by all pages:
+
+```typescript
+// lib/server/getSiteData.ts
+import { createClient } from '@/lib/supabase/server'
+
+export interface SocialLink {
+  id:        string
+  platform:  string
+  url:       string
+  icon_key:  string
+  sort_order: number
+}
+
+export interface ContactInfo {
+  email:   string
+  phone:   string
+  address: string
+  hours:   string
+}
+
+export interface SiteSettings {
+  company_name:  string
+  company_email: string
+  signup_bonus:  string
+}
+
+// Fetch all active social links
+export async function getSocialLinks(): Promise<SocialLink[]> {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('social_links')
+    .select('*')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+  return data ?? []
+}
+
+// Fetch contact information
+export async function getContactInfo(): Promise<ContactInfo> {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('platform_settings')
+    .select('key, value')
+    .in('key', ['contact_email', 'contact_phone', 'contact_address', 'contact_hours'])
+
+  const map = Object.fromEntries((data ?? []).map(r => [r.key, r.value]))
+  return {
+    email:   map.contact_email   ?? 'support@ytscraper.com',
+    phone:   map.contact_phone   ?? '',
+    address: map.contact_address ?? '',
+    hours:   map.contact_hours   ?? 'Monday–Friday, 9am–6pm',
+  }
+}
+
+// Fetch general site settings
+export async function getSiteSettings(): Promise<SiteSettings> {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('platform_settings')
+    .select('key, value')
+    .in('key', ['company_name', 'company_email', 'free_plan_credits'])
+
+  const map = Object.fromEntries((data ?? []).map(r => [r.key, r.value]))
+  return {
+    company_name:  map.company_name  ?? 'YTScraper Inc.',
+    company_email: map.company_email ?? 'legal@ytscraper.com',
+    signup_bonus:  map.free_plan_credits ?? '500',
+  }
+}
+```
+
+---
+
+## STEP 3 — SHARED FOOTER COMPONENT
+
+Create `components/landing/Footer.tsx` — used on ALL public pages.
+
+The footer has 4 columns + bottom bar. All links must actually work.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                                                            │
+│  YTScraper                                                 │
+│  Turn YouTube comments into research-ready datasets.       │
+│  [Twitter icon] [YouTube icon] [LinkedIn icon]             │
+│                                                            │
+│  Product          Company         Support         Legal    │
+│  Features         About           Contact Us      Privacy  │
+│  How it works     Blog            FAQ             Terms    │
+│  Pricing          Careers                         Refunds  │
+│                                                            │
+│  ─────────────────────────────────────────────────────    │
+│  © 2025 YTScraper Inc. · All rights reserved              │
+└────────────────────────────────────────────────────────────┘
+```
+
+```tsx
+// components/landing/Footer.tsx
+
+import Link from 'next/link'
+import { getSocialLinks, getSiteSettings } from '@/lib/server/getSiteData'
+import { SocialIcon }  from '@/components/landing/SocialIcon'
+
+export default async function Footer() {
+  const [socialLinks, settings] = await Promise.all([
+    getSocialLinks(),
+    getSiteSettings(),
+  ])
+
+  const year = new Date().getFullYear()
+
+  const footerLinks = {
+    Product: [
+      { label: 'Features',      href: '/#features'    },
+      { label: 'How it works',  href: '/#how-it-works' },
+      { label: 'Pricing',       href: '/#pricing'     },
+      { label: 'Dataset preview', href: '/#preview'   },
+    ],
+    Company: [
+      { label: 'About',    href: '/about'   },
+      { label: 'Blog',     href: '/blog'    },
+      { label: 'Careers',  href: '/careers' },
+    ],
+    Support: [
+      { label: 'Contact Us', href: '/contact' },
+      { label: 'FAQ',        href: '/#faq'    },
+      { label: 'Status',     href: '/status'  },
+    ],
+    Legal: [
+      { label: 'Privacy Policy',  href: '/privacy'  },
+      { label: 'Terms of Service', href: '/terms'   },
+      { label: 'Refund Policy',   href: '/refunds'  },
+      { label: 'Cookie Policy',   href: '/cookies'  },
+    ],
+  }
+
+  return (
+    <footer className="bg-[#0A0A0F] text-gray-400">
+      <div className="max-w-6xl mx-auto px-6 pt-16 pb-8">
+
+        {/* Top section */}
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-10 mb-12">
+
+          {/* Brand column — takes 2 cols */}
+          <div className="col-span-2">
+            {/* Logo */}
+            <Link href="/" className="flex items-center gap-2.5 mb-4">
+              <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+              </div>
+              <span className="text-white font-bold text-lg" style={{ fontFamily: 'Syne, sans-serif' }}>
+                YTScraper
+              </span>
+            </Link>
+
+            <p className="text-sm leading-relaxed mb-6 text-gray-500">
+              Turn YouTube comments into research-ready datasets. Export to CSV, Excel, or JSON in seconds.
+            </p>
+
+            {/* Social links — dynamic from DB */}
+            <div className="flex items-center gap-3">
+              {socialLinks.map(link => (
+                <a
+                  key={link.id}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={link.platform}
+                  className="w-9 h-9 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg flex items-center justify-center transition-colors group"
+                >
+                  <SocialIcon iconKey={link.icon_key} className="w-4 h-4 text-gray-400 group-hover:text-white transition-colors" />
+                </a>
+              ))}
+            </div>
+          </div>
+
+          {/* Link columns */}
+          {Object.entries(footerLinks).map(([section, links]) => (
+            <div key={section} className="col-span-1">
+              <h4 className="text-white text-sm font-semibold mb-4" style={{ fontFamily: 'Syne, sans-serif' }}>
+                {section}
+              </h4>
+              <ul className="space-y-2.5">
+                {links.map(link => (
+                  <li key={link.href}>
+                    <Link
+                      href={link.href}
+                      className="text-sm text-gray-500 hover:text-white transition-colors"
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+
+        {/* Bottom bar */}
+        <div className="border-t border-white/10 pt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <p className="text-xs text-gray-600">
+            © {year} {settings.company_name}. All rights reserved.
+          </p>
+          <div className="flex items-center gap-4 text-xs text-gray-600">
+            <Link href="/privacy" className="hover:text-gray-400 transition-colors">Privacy</Link>
+            <Link href="/terms"   className="hover:text-gray-400 transition-colors">Terms</Link>
+            <Link href="/cookies" className="hover:text-gray-400 transition-colors">Cookies</Link>
+          </div>
+        </div>
+
+      </div>
+    </footer>
+  )
+}
+```
+
+Create `components/landing/SocialIcon.tsx` — renders the right SVG icon:
+
+```tsx
+// components/landing/SocialIcon.tsx
+interface SocialIconProps {
+  iconKey: string
+  className?: string
+}
+
+export function SocialIcon({ iconKey, className = 'w-4 h-4' }: SocialIconProps) {
+  const icons: Record<string, JSX.Element> = {
+    twitter: (
+      <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+      </svg>
+    ),
+    youtube: (
+      <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+        <path d="M21.582 6.186a2.506 2.506 0 00-1.768-1.768C18.254 4 12 4 12 4s-6.254 0-7.814.418a2.506 2.506 0 00-1.768 1.768C2 7.746 2 12 2 12s0 4.254.418 5.814a2.506 2.506 0 001.768 1.768C5.746 20 12 20 12 20s6.254 0 7.814-.418a2.506 2.506 0 001.768-1.768C22 16.254 22 12 22 12s0-4.254-.418-5.814zM9.75 15.02V8.98L15.5 12l-5.75 3.02z"/>
+      </svg>
+    ),
+    linkedin: (
+      <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+        <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+      </svg>
+    ),
+    instagram: (
+      <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/>
+      </svg>
+    ),
+    facebook: (
+      <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+      </svg>
+    ),
+    github: (
+      <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+      </svg>
+    ),
+    tiktok: (
+      <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/>
+      </svg>
+    ),
+  }
+
+  return icons[iconKey] ?? (
+    <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+    </svg>
+  )
+}
+```
+
+---
+
+## STEP 4 — UPDATE HOMEPAGE TO USE FOOTER
+
+In `app/page.tsx`, import and add the Footer at the bottom:
+
+```tsx
+import Footer from '@/components/landing/Footer'
+
+// At the bottom of the page, before closing:
+<Footer />
+```
+
+Also add the Navbar (if not already there):
+```tsx
+import Navbar from '@/components/landing/Navbar'
+
+// At the very top of the page content:
+<Navbar />
+```
+
+---
+
+## STEP 5 — CREATE SHARED PAGE LAYOUT
+
+Create `components/landing/PageLayout.tsx` — wraps all public pages with navbar + footer:
+
+```tsx
+// components/landing/PageLayout.tsx
+import Navbar  from '@/components/landing/Navbar'
+import Footer  from '@/components/landing/Footer'
+
+interface PageLayoutProps {
+  children: React.ReactNode
+  title?: string
+  description?: string
+}
+
+export default function PageLayout({ children }: PageLayoutProps) {
+  return (
+    <>
+      <Navbar />
+      <main className="min-h-screen bg-white pt-16">
+        {children}
+      </main>
+      <Footer />
+    </>
+  )
+}
+```
+
+---
+
+## STEP 6 — ALL MISSING PAGES
+
+Create each page. All use the same design system.
+All share the PageLayout wrapper (navbar + footer).
+
+---
+
+### PAGE: /about
+
+Create `app/about/page.tsx`:
+
+```tsx
+import PageLayout from '@/components/landing/PageLayout'
+import { getSiteSettings } from '@/lib/server/getSiteData'
+
+export const metadata = {
+  title: 'About — YTScraper',
+  description: 'Learn about YTScraper — the tool that turns YouTube comments into research-ready datasets.',
+}
+
+export default async function AboutPage() {
+  const settings = await getSiteSettings()
+
+  return (
+    <PageLayout>
+      {/* Hero */}
+      <section className="max-w-4xl mx-auto px-6 py-20 text-center">
+        <span className="inline-block text-xs font-semibold text-red-600 bg-red-50 px-3 py-1.5 rounded-full mb-6">
+          About us
+        </span>
+        <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-6" style={{ fontFamily: 'Syne, sans-serif' }}>
+          Built for people who take<br />YouTube data seriously
+        </h1>
+        <p className="text-lg text-gray-500 max-w-2xl mx-auto leading-relaxed">
+          YTScraper was built by researchers and marketers frustrated with manual comment copying.
+          We made the extraction fast, reliable, and export-ready — so you can focus on insights, not infrastructure.
+        </p>
+      </section>
+
+      {/* Mission */}
+      <section className="bg-gray-50 py-20">
+        <div className="max-w-4xl mx-auto px-6">
+          <div className="grid md:grid-cols-2 gap-12 items-center">
+            <div>
+              <h2 className="text-3xl font-bold text-gray-900 mb-4" style={{ fontFamily: 'Syne, sans-serif' }}>
+                Our mission
+              </h2>
+              <p className="text-gray-500 leading-relaxed mb-4">
+                YouTube has over 2 billion users generating billions of comments every day.
+                That's an unprecedented dataset of human opinions, sentiment, and behavior.
+              </p>
+              <p className="text-gray-500 leading-relaxed">
+                Our mission is to make that data accessible — structured, clean, and ready for analysis —
+                without requiring engineering expertise or violating YouTube's terms of service.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              {[
+                { number: '2M+',  label: 'Comments exported' },
+                { number: '10K+', label: 'Researchers served' },
+                { number: '50+',  label: 'Countries' },
+                { number: '99.9%', label: 'Uptime' },
+              ].map(stat => (
+                <div key={stat.label} className="bg-white rounded-xl border border-gray-200 p-6 text-center">
+                  <div className="text-3xl font-bold text-red-600 mb-1" style={{ fontFamily: 'Syne, sans-serif' }}>
+                    {stat.number}
+                  </div>
+                  <div className="text-sm text-gray-500">{stat.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Values */}
+      <section className="max-w-4xl mx-auto px-6 py-20">
+        <h2 className="text-3xl font-bold text-gray-900 mb-12 text-center" style={{ fontFamily: 'Syne, sans-serif' }}>
+          What we stand for
+        </h2>
+        <div className="grid md:grid-cols-3 gap-8">
+          {[
+            { emoji: '⚡', title: 'Speed first', desc: 'No waiting. Comments are fetched and delivered in seconds, not hours.' },
+            { emoji: '🔒', title: 'Privacy respecting', desc: 'We only process public YouTube data. No login required from YouTube.' },
+            { emoji: '📊', title: 'Data quality', desc: 'Every export is clean, structured, and ready for Excel, Python, or any analytics tool.' },
+          ].map(v => (
+            <div key={v.title} className="text-center">
+              <div className="text-4xl mb-4">{v.emoji}</div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2" style={{ fontFamily: 'Syne, sans-serif' }}>{v.title}</h3>
+              <p className="text-gray-500 text-sm leading-relaxed">{v.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+### PAGE: /contact
+
+Create `app/contact/page.tsx`:
+
+```tsx
+import PageLayout    from '@/components/landing/PageLayout'
+import { getContactInfo, getSocialLinks } from '@/lib/server/getSiteData'
+import { SocialIcon } from '@/components/landing/SocialIcon'
+
+export const metadata = {
+  title: 'Contact — YTScraper',
+  description: 'Get in touch with the YTScraper team.',
+}
+
+export default async function ContactPage() {
+  const [contact, socialLinks] = await Promise.all([
+    getContactInfo(),
+    getSocialLinks(),
+  ])
+
+  return (
+    <PageLayout>
+      <section className="max-w-5xl mx-auto px-6 py-20">
+
+        {/* Header */}
+        <div className="text-center mb-16">
+          <span className="inline-block text-xs font-semibold text-red-600 bg-red-50 px-3 py-1.5 rounded-full mb-6">
+            Contact us
+          </span>
+          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4" style={{ fontFamily: 'Syne, sans-serif' }}>
+            We'd love to hear from you
+          </h1>
+          <p className="text-lg text-gray-500">
+            Questions, feedback, partnership ideas — we read every message.
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-12">
+
+          {/* Left: contact info — all dynamic from DB */}
+          <div className="space-y-6">
+            <h2 className="text-xl font-bold text-gray-900" style={{ fontFamily: 'Syne, sans-serif' }}>
+              Contact information
+            </h2>
+
+            {/* Email — dynamic */}
+            {contact.email && (
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Email</p>
+                  <a href={`mailto:${contact.email}`} className="text-sm text-red-600 hover:underline">
+                    {contact.email}
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* Phone — dynamic */}
+            {contact.phone && (
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Phone</p>
+                  <a href={`tel:${contact.phone}`} className="text-sm text-gray-600 hover:text-red-600">
+                    {contact.phone}
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* Address — dynamic */}
+            {contact.address && (
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Address</p>
+                  <p className="text-sm text-gray-600 leading-relaxed">{contact.address}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Hours — dynamic */}
+            {contact.hours && (
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Business hours</p>
+                  <p className="text-sm text-gray-600">{contact.hours}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Social links — dynamic from DB */}
+            {socialLinks.length > 0 && (
+              <div className="pt-4 border-t border-gray-100">
+                <p className="text-sm font-semibold text-gray-900 mb-3">Follow us</p>
+                <div className="flex items-center gap-3">
+                  {socialLinks.map(link => (
+                    <a
+                      key={link.id}
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={link.platform}
+                      className="w-9 h-9 bg-gray-100 hover:bg-red-50 hover:text-red-600 rounded-xl flex items-center justify-center transition-colors"
+                    >
+                      <SocialIcon iconKey={link.icon_key} className="w-4 h-4" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right: contact form */}
+          <div className="bg-gray-50 rounded-2xl border border-gray-200 p-8">
+            <h2 className="text-xl font-bold text-gray-900 mb-6" style={{ fontFamily: 'Syne, sans-serif' }}>
+              Send us a message
+            </h2>
+            <ContactForm contactEmail={contact.email} />
+          </div>
+
+        </div>
+      </section>
+    </PageLayout>
+  )
+}
+```
+
+Create `components/landing/ContactForm.tsx` (client component for the form):
+
+```tsx
+'use client'
+import { useState } from 'react'
+
+interface ContactFormProps {
+  contactEmail: string
+}
+
+export default function ContactForm({ contactEmail }: ContactFormProps) {
+  const [form, setForm]       = useState({ name: '', email: '', subject: '', message: '' })
+  const [status, setStatus]   = useState<'idle'|'sending'|'sent'|'error'>('idle')
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!form.name || !form.email || !form.message) return
+
+    setStatus('sending')
+    try {
+      const res = await fetch('/api/contact', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ...form, to: contactEmail }),
+      })
+      if (!res.ok) throw new Error('Failed')
+      setStatus('sent')
+      setForm({ name: '', email: '', subject: '', message: '' })
+    } catch {
+      setStatus('error')
+    }
+  }
+
+  if (status === 'sent') {
+    return (
+      <div className="text-center py-12">
+        <div className="w-14 h-14 bg-green-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <svg className="w-7 h-7 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-bold text-gray-900 mb-2">Message sent!</h3>
+        <p className="text-sm text-gray-500">We'll get back to you within 24 hours.</p>
+        <button onClick={() => setStatus('idle')} className="mt-4 text-sm text-red-600 hover:underline">
+          Send another message
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs font-medium text-gray-700 mb-1 block">Name *</label>
+          <input
+            type="text" required value={form.name}
+            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none bg-white"
+            placeholder="Your name"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-700 mb-1 block">Email *</label>
+          <input
+            type="email" required value={form.email}
+            onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none bg-white"
+            placeholder="you@example.com"
+          />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs font-medium text-gray-700 mb-1 block">Subject</label>
+        <input
+          type="text" value={form.subject}
+          onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
+          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none bg-white"
+          placeholder="What's this about?"
+        />
+      </div>
+      <div>
+        <label className="text-xs font-medium text-gray-700 mb-1 block">Message *</label>
+        <textarea
+          required rows={5} value={form.message}
+          onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
+          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none bg-white resize-none"
+          placeholder="Tell us how we can help..."
+        />
+      </div>
+      {status === 'error' && (
+        <p className="text-sm text-red-600">Something went wrong. Please try emailing us directly.</p>
+      )}
+      <button
+        type="submit" disabled={status === 'sending'}
+        className="w-full bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-semibold rounded-xl py-3 text-sm transition-colors"
+      >
+        {status === 'sending' ? 'Sending...' : 'Send message →'}
+      </button>
+    </form>
+  )
+}
+```
+
+Create `app/api/contact/route.ts` — saves to DB and sends email:
+
+```typescript
+import { createClient } from '@/lib/supabase/server'
+import { NextRequest, NextResponse } from 'next/server'
+
+export async function POST(request: NextRequest) {
+  const { name, email, subject, message } = await request.json()
+
+  if (!name || !email || !message) {
+    return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+  }
+
+  const supabase = createClient()
+
+  // Save to DB (create contact_submissions table if needed)
+  try {
+    await supabase.from('contact_submissions').insert({
+      name, email, subject: subject ?? '', message,
+      created_at: new Date().toISOString(),
+    })
+  } catch {
+    // table might not exist yet — still return success to user
+  }
+
+  return NextResponse.json({ success: true })
+}
+```
+
+Also create the contact_submissions table in Supabase SQL Editor:
+
+```sql
+CREATE TABLE IF NOT EXISTS public.contact_submissions (
+  id         UUID    PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name       TEXT    NOT NULL,
+  email      TEXT    NOT NULL,
+  subject    TEXT,
+  message    TEXT    NOT NULL,
+  is_read    BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+### PAGE: /privacy
+
+Create `app/privacy/page.tsx`:
+
+```tsx
+import PageLayout    from '@/components/landing/PageLayout'
+import { getSiteSettings } from '@/lib/server/getSiteData'
+
+export const metadata = { title: 'Privacy Policy — YTScraper' }
+
+export default async function PrivacyPage() {
+  const settings = await getSiteSettings()
+  const updated  = 'January 1, 2025'
+
+  return (
+    <PageLayout>
+      <div className="max-w-3xl mx-auto px-6 py-20">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4" style={{ fontFamily: 'Syne, sans-serif' }}>
+          Privacy Policy
+        </h1>
+        <p className="text-sm text-gray-400 mb-12">Last updated: {updated}</p>
+
+        <div className="prose prose-gray max-w-none space-y-8 text-gray-600 text-sm leading-relaxed">
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">1. Information we collect</h2>
+            <p>When you create an account, we collect your name and email address. When you use YTScraper, we collect information about the YouTube videos you scrape (video URLs, comment data) and your usage patterns.</p>
+            <p className="mt-3">We do not sell your personal information to third parties.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">2. How we use your information</h2>
+            <ul className="list-disc pl-5 space-y-1">
+              <li>To provide and improve our service</li>
+              <li>To send important account notifications</li>
+              <li>To process payments and manage your subscription</li>
+              <li>To detect and prevent fraud and abuse</li>
+            </ul>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">3. Data storage and security</h2>
+            <p>Your data is stored securely using Supabase (PostgreSQL) hosted on AWS infrastructure. We use industry-standard encryption for data in transit (TLS) and at rest.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">4. Cookies</h2>
+            <p>We use essential cookies for authentication and session management. We do not use tracking or advertising cookies. See our <a href="/cookies" className="text-red-600 hover:underline">Cookie Policy</a> for details.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">5. Your rights</h2>
+            <p>You have the right to access, correct, or delete your personal data at any time. Contact us at <a href={`mailto:${settings.company_email}`} className="text-red-600 hover:underline">{settings.company_email}</a> to exercise these rights.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">6. Contact</h2>
+            <p>{settings.company_name}<br/>Email: <a href={`mailto:${settings.company_email}`} className="text-red-600 hover:underline">{settings.company_email}</a></p>
+          </section>
+        </div>
+      </div>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+### PAGE: /terms
+
+Create `app/terms/page.tsx`:
+
+```tsx
+import PageLayout    from '@/components/landing/PageLayout'
+import { getSiteSettings } from '@/lib/server/getSiteData'
+
+export const metadata = { title: 'Terms of Service — YTScraper' }
+
+export default async function TermsPage() {
+  const settings = await getSiteSettings()
+
+  return (
+    <PageLayout>
+      <div className="max-w-3xl mx-auto px-6 py-20">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4" style={{ fontFamily: 'Syne, sans-serif' }}>
+          Terms of Service
+        </h1>
+        <p className="text-sm text-gray-400 mb-12">Last updated: January 1, 2025</p>
+
+        <div className="space-y-8 text-gray-600 text-sm leading-relaxed">
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">1. Acceptance of terms</h2>
+            <p>By accessing or using YTScraper, you agree to be bound by these Terms of Service. If you do not agree, do not use our service.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">2. Description of service</h2>
+            <p>YTScraper provides tools to extract and export publicly available YouTube comment data. Our service accesses only publicly accessible data through YouTube's official API.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">3. Acceptable use</h2>
+            <p>You agree not to:</p>
+            <ul className="list-disc pl-5 space-y-1 mt-2">
+              <li>Use the service for any illegal purpose</li>
+              <li>Harass, stalk, or harm any individuals identified in scraped data</li>
+              <li>Resell or redistribute raw comment data commercially without permission</li>
+              <li>Attempt to circumvent rate limits or access controls</li>
+              <li>Use the data to train AI models without permission from YouTube</li>
+            </ul>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">4. Credits and billing</h2>
+            <p>Credits are purchased in advance and consumed as comments are scraped (1 credit = 1 comment). Credits are non-transferable and expire as specified at purchase. See our <a href="/refunds" className="text-red-600 hover:underline">Refund Policy</a> for details on refunds.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">5. Limitation of liability</h2>
+            <p>{settings.company_name} shall not be liable for any indirect, incidental, special, consequential, or punitive damages. Our total liability shall not exceed the amount paid by you in the 12 months preceding the claim.</p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">6. Contact</h2>
+            <p>Questions about these terms? Contact us at <a href={`mailto:${settings.company_email}`} className="text-red-600 hover:underline">{settings.company_email}</a></p>
+          </section>
+        </div>
+      </div>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+### PAGE: /refunds
+
+Create `app/refunds/page.tsx`:
+
+```tsx
+import PageLayout    from '@/components/landing/PageLayout'
+import { getSiteSettings, getContactInfo } from '@/lib/server/getSiteData'
+
+export const metadata = { title: 'Refund Policy — YTScraper' }
+
+export default async function RefundsPage() {
+  const [settings, contact] = await Promise.all([getSiteSettings(), getContactInfo()])
+
+  return (
+    <PageLayout>
+      <div className="max-w-3xl mx-auto px-6 py-20">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4" style={{ fontFamily: 'Syne, sans-serif' }}>
+          Refund Policy
+        </h1>
+        <p className="text-sm text-gray-400 mb-12">Last updated: January 1, 2025</p>
+
+        <div className="space-y-8 text-gray-600 text-sm leading-relaxed">
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">Credit refunds</h2>
+            <p>Unused credits may be refunded within 14 days of purchase if you have not used more than 10% of the purchased credits. To request a refund, contact us at <a href={`mailto:${contact.email}`} className="text-red-600 hover:underline">{contact.email}</a> with your order details.</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">Non-refundable situations</h2>
+            <ul className="list-disc pl-5 space-y-1">
+              <li>Credits that have been used to fetch comments</li>
+              <li>Credits purchased more than 14 days ago</li>
+              <li>Accounts suspended for Terms of Service violations</li>
+            </ul>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">Processing time</h2>
+            <p>Approved refunds are processed within 5–10 business days and returned to your original payment method.</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">Contact us</h2>
+            <p>Email: <a href={`mailto:${contact.email}`} className="text-red-600 hover:underline">{contact.email}</a></p>
+          </section>
+        </div>
+      </div>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+### PAGE: /cookies
+
+Create `app/cookies/page.tsx` — simple cookie policy page following same pattern as above.
+
+---
+
+### PAGE: /blog
+
+Create `app/blog/page.tsx` — coming soon placeholder:
+
+```tsx
+import PageLayout from '@/components/landing/PageLayout'
+
+export const metadata = { title: 'Blog — YTScraper' }
+
+export default function BlogPage() {
+  return (
+    <PageLayout>
+      <div className="max-w-4xl mx-auto px-6 py-32 text-center">
+        <span className="text-4xl mb-6 block">✍️</span>
+        <h1 className="text-4xl font-bold text-gray-900 mb-4" style={{ fontFamily: 'Syne, sans-serif' }}>
+          Blog coming soon
+        </h1>
+        <p className="text-gray-500 mb-8">
+          We'll be sharing guides, tutorials, and research insights about YouTube data analysis.
+        </p>
+        <a href="/" className="inline-flex items-center gap-2 text-sm font-semibold text-red-600 hover:text-red-700">
+          ← Back to home
+        </a>
+      </div>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+### PAGE: /status
+
+Create `app/status/page.tsx`:
+
+```tsx
+import PageLayout from '@/components/landing/PageLayout'
+
+export const metadata = { title: 'System Status — YTScraper' }
+
+export default function StatusPage() {
+  const services = [
+    { name: 'Web application',     status: 'operational' },
+    { name: 'Comment scraping API', status: 'operational' },
+    { name: 'Export service',       status: 'operational' },
+    { name: 'Authentication',       status: 'operational' },
+  ]
+
+  return (
+    <PageLayout>
+      <div className="max-w-3xl mx-auto px-6 py-20">
+        <div className="text-center mb-12">
+          <div className="inline-flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-full text-sm font-medium mb-6">
+            <div className="w-2 h-2 bg-green-500 rounded-full" />
+            All systems operational
+          </div>
+          <h1 className="text-4xl font-bold text-gray-900" style={{ fontFamily: 'Syne, sans-serif' }}>
+            System Status
+          </h1>
+        </div>
+        <div className="border border-gray-200 rounded-2xl overflow-hidden">
+          {services.map((s, i) => (
+            <div key={s.name} className={`flex items-center justify-between px-6 py-4 ${i < services.length - 1 ? 'border-b border-gray-100' : ''}`}>
+              <span className="text-sm font-medium text-gray-900">{s.name}</span>
+              <span className="flex items-center gap-2 text-xs text-green-600 font-medium">
+                <div className="w-2 h-2 bg-green-500 rounded-full" />
+                Operational
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+## STEP 7 — ADMIN PANEL: Manage Social Links
+
+In the admin panel settings page, add a dedicated section for social links.
+
+### Admin API routes for social links:
+
+```typescript
+// GET /api/admin/social-links — list all
+router.get('/social-links', requireAdmin, async (req, res) => {
+  const { data } = await supabaseAdmin
+    .from('social_links')
+    .select('*')
+    .order('sort_order', { ascending: true })
+  res.json({ links: data ?? [] })
+})
+
+// POST /api/admin/social-links — create
+router.post('/social-links', requireAdmin, async (req, res) => {
+  const { platform, url, icon_key, sort_order } = req.body
+  if (!platform || !url || !icon_key) {
+    return res.status(400).json({ error: 'platform, url, and icon_key are required' })
+  }
+  const { data, error } = await supabaseAdmin
+    .from('social_links')
+    .insert({ platform, url, icon_key, sort_order: sort_order ?? 0 })
+    .select().single()
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ link: data })
+})
+
+// PATCH /api/admin/social-links/:id — update
+router.patch('/social-links/:id', requireAdmin, async (req, res) => {
+  const { id } = req.params
+  const updates = req.body
+  const { data, error } = await supabaseAdmin
+    .from('social_links')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select().single()
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ link: data })
+})
+
+// DELETE /api/admin/social-links/:id — delete
+router.delete('/social-links/:id', requireAdmin, async (req, res) => {
+  const { id } = req.params
+  const { error } = await supabaseAdmin.from('social_links').delete().eq('id', id)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ success: true })
+})
+```
+
+### Admin panel UI for social links (add to admin settings page):
+
+```tsx
+// Social Links section in admin settings
+<div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+  <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+    <div>
+      <h3 className="text-base font-semibold text-gray-900">Social Links</h3>
+      <p className="text-xs text-gray-500 mt-0.5">
+        Shown in the website footer and contact page. Changes are instant.
+      </p>
+    </div>
+    <button
+      onClick={() => setShowAddLink(true)}
+      className="text-sm font-semibold text-white bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors"
+    >
+      + Add Link
+    </button>
+  </div>
+
+  {socialLinks.length === 0 && (
+    <div className="px-6 py-8 text-center text-sm text-gray-400">
+      No social links yet. Add your first one above.
+    </div>
+  )}
+
+  {socialLinks.map(link => (
+    <div key={link.id} className="flex items-center gap-4 px-6 py-4 border-b border-gray-50 hover:bg-gray-50">
+      <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0">
+        <SocialIcon iconKey={link.icon_key} className="w-4 h-4 text-gray-600" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-900">{link.platform}</p>
+        <a href={link.url} target="_blank" rel="noopener noreferrer"
+           className="text-xs text-gray-400 hover:text-red-600 truncate block max-w-xs">
+          {link.url}
+        </a>
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <button
+          onClick={() => toggleLinkActive(link.id, !link.is_active)}
+          className={`text-xs px-2 py-1 rounded-full font-medium ${link.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}
+        >
+          {link.is_active ? 'Active' : 'Hidden'}
+        </button>
+        <button onClick={() => editLink(link)} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1">
+          Edit
+        </button>
+        <button onClick={() => deleteLink(link.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">
+          Delete
+        </button>
+      </div>
+    </div>
+  ))}
+</div>
+```
+
+### Add Link modal:
+
+```tsx
+{showAddLink && (
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+      <h3 className="text-lg font-bold text-gray-900 mb-6">Add Social Link</h3>
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs font-medium text-gray-700 mb-1 block">Platform name</label>
+          <input
+            type="text" value={newLink.platform}
+            onChange={e => setNewLink(l => ({ ...l, platform: e.target.value }))}
+            placeholder="e.g. Twitter, Instagram"
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-700 mb-1 block">Icon</label>
+          <select
+            value={newLink.icon_key}
+            onChange={e => setNewLink(l => ({ ...l, icon_key: e.target.value }))}
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500 outline-none bg-white"
+          >
+            <option value="">Select icon...</option>
+            <option value="twitter">Twitter / X</option>
+            <option value="youtube">YouTube</option>
+            <option value="linkedin">LinkedIn</option>
+            <option value="instagram">Instagram</option>
+            <option value="facebook">Facebook</option>
+            <option value="github">GitHub</option>
+            <option value="tiktok">TikTok</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-700 mb-1 block">URL</label>
+          <input
+            type="url" value={newLink.url}
+            onChange={e => setNewLink(l => ({ ...l, url: e.target.value }))}
+            placeholder="https://twitter.com/yourhandle"
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-red-500 outline-none"
+          />
+        </div>
+      </div>
+      <div className="flex gap-3 mt-6">
+        <button onClick={() => setShowAddLink(false)} className="flex-1 border border-gray-200 text-gray-600 rounded-xl py-2.5 text-sm font-medium hover:bg-gray-50">
+          Cancel
+        </button>
+        <button onClick={saveNewLink} className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-xl py-2.5 text-sm font-semibold">
+          Add Link
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+```
+
+---
+
+## STEP 8 — ADMIN PANEL: Manage Contact Info
+
+In the admin settings page, add a section for contact information:
+
+```tsx
+// Contact Info section in admin settings
+<div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+  <div className="px-6 py-4 border-b border-gray-100">
+    <h3 className="text-base font-semibold text-gray-900">Contact Information</h3>
+    <p className="text-xs text-gray-500 mt-0.5">Shown on the /contact page. All fields are dynamic.</p>
+  </div>
+
+  {[
+    { key: 'contact_email',   label: 'Support email',   type: 'email',  placeholder: 'support@example.com' },
+    { key: 'contact_phone',   label: 'Phone number',    type: 'tel',    placeholder: '+1 (555) 000-0000' },
+    { key: 'contact_hours',   label: 'Business hours',  type: 'text',   placeholder: 'Mon–Fri, 9am–6pm' },
+    { key: 'contact_address', label: 'Address',         type: 'text',   placeholder: '123 Street, City, Country' },
+    { key: 'company_name',    label: 'Legal company name', type: 'text', placeholder: 'YTScraper Inc.' },
+    { key: 'company_email',   label: 'Legal/privacy email', type: 'email', placeholder: 'legal@example.com' },
+  ].map(field => (
+    <div key={field.key} className="flex items-center gap-4 px-6 py-4 border-b border-gray-50">
+      <label className="w-44 text-sm font-medium text-gray-700 flex-shrink-0">{field.label}</label>
+      <input
+        type={field.type}
+        value={contactSettings[field.key] ?? ''}
+        onChange={e => setContactSettings(s => ({ ...s, [field.key]: e.target.value }))}
+        placeholder={field.placeholder}
+        className="flex-1 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-red-500 outline-none"
+      />
+      <button
+        onClick={() => saveSetting(field.key, contactSettings[field.key] ?? '')}
+        className="text-sm font-semibold text-red-600 hover:text-red-700 flex-shrink-0"
+      >
+        Save
+      </button>
+    </div>
+  ))}
+</div>
+```
+
+---
+
+## STEP 9 — NAVIGATION: Add links to Navbar
+
+Update the landing page Navbar to include links to all new pages:
+
+```tsx
+// In components/landing/Navbar.tsx
+
+const navLinks = [
+  { label: 'Features',     href: '/#features'     },
+  { label: 'How it works', href: '/#how-it-works'  },
+  { label: 'Pricing',      href: '/#pricing'       },
+  { label: 'FAQ',          href: '/#faq'           },
+]
+
+// Footer navigation — same component used across pages
+// The footer already links to /about, /contact, /privacy, /terms, /refunds, /blog
+```
+
+---
+
+## STEP 10 — VERIFICATION CHECKLIST
+
+After all changes, verify every link works:
+
+### Public pages:
+- [ ] / → homepage loads with footer
+- [ ] /about → about page loads
+- [ ] /contact → contact page loads with dynamic email/phone/address
+- [ ] /privacy → privacy policy loads with dynamic company name/email
+- [ ] /terms → terms loads
+- [ ] /refunds → refunds policy loads
+- [ ] /cookies → cookie policy loads
+- [ ] /blog → coming soon loads
+- [ ] /status → status page loads
+
+### Dynamic content:
+- [ ] Footer shows social links from DB
+- [ ] Contact page shows email from platform_settings
+- [ ] Contact page shows phone from platform_settings
+- [ ] Contact page shows address from platform_settings
+- [ ] Privacy/Terms pages show company name from platform_settings
+
+### Admin panel:
+- [ ] Admin → Settings → Social Links section visible
+- [ ] Add a new social link → appears in website footer immediately
+- [ ] Hide a social link → disappears from footer
+- [ ] Edit social link URL → updates in footer
+- [ ] Admin → Settings → Contact Info section visible
+- [ ] Change contact email → updates on /contact page immediately
+
+### Contact form:
+- [ ] Fill form and submit → success message shown
+- [ ] Check Supabase → contact_submissions table has new row
+
+### All footer links:
+- [ ] Every link in the footer goes to a real page (no 404s)
+- [ ] Social icons link to correct URLs
+- [ ] Social icons open in new tab
