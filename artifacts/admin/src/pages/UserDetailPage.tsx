@@ -18,9 +18,11 @@ export default function UserDetailPage() {
   const [jobsPage, setJobsPage] = useState(1);
   const [jobsCount, setJobsCount] = useState(0);
   const [payments, setPayments] = useState<any>(null);
-  const [credits, setCredits] = useState<any[]>([]);
-  const [creditsPage, setCreditsPage] = useState(1);
-  const [creditsCount, setCreditsCount] = useState(0);
+  const [spentByJob, setSpentByJob] = useState<any[]>([]);
+  const [received, setReceived] = useState<any[]>([]);
+  const [spentPage, setSpentPage] = useState(0);
+  const [receivedPage, setReceivedPage] = useState(0);
+  const CREDITS_PER_PAGE = 10;
   const [sessions, setSessions] = useState<any>(null);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [modal, setModal] = useState<string | null>(null);
@@ -36,10 +38,10 @@ export default function UserDetailPage() {
   useEffect(() => {
     if (tab === 'jobs') api.get(`/admin/users/${id}/jobs?page=${jobsPage}`).then(d => { setJobs(d.data ?? []); setJobsCount(d.count ?? 0); });
     if (tab === 'payments') api.get(`/admin/users/${id}/payments`).then(setPayments);
-    if (tab === 'credits') api.get(`/admin/users/${id}/credits?page=${creditsPage}`).then(d => { setCredits(d.data ?? []); setCreditsCount(d.count ?? 0); });
+    if (tab === 'credits') api.get(`/admin/users/${id}/credits`).then(d => { setSpentByJob(d.spentByJob ?? []); setReceived(d.received ?? []); setSpentPage(0); setReceivedPage(0); });
     if (tab === 'security') api.get(`/admin/users/${id}/sessions`).then(setSessions);
     if (tab === 'notifications') api.get(`/admin/users/${id}/notifications`).then(d => setNotifications(d.data ?? []));
-  }, [tab, id, jobsPage, creditsPage]);
+  }, [tab, id, jobsPage]);
 
   const doAction = async (action: string, body?: any) => {
     setWorking(true);
@@ -214,79 +216,89 @@ export default function UserDetailPage() {
         )}
 
         {tab === 'credits' && (
-          <div>
-            <div className="grid grid-cols-3 gap-4 mb-4 p-3 bg-gray-50 rounded-lg text-sm">
+          <div className="space-y-6">
+            {/* Summary */}
+            <div className="grid grid-cols-3 gap-4 p-3 bg-gray-50 rounded-lg text-sm">
               <div><p className="text-xs text-gray-400">Balance</p><p className="font-bold">{(user.user_credit_balance?.balance ?? 0).toLocaleString()}</p></div>
-              <div><p className="text-xs text-gray-400">Total Added</p><p className="font-bold text-green-600">{credits.filter(c => c.amount > 0).reduce((s, c) => s + c.amount, 0).toLocaleString()}</p></div>
-              <div><p className="text-xs text-gray-400">Total Spent</p><p className="font-bold text-red-600">{Math.abs(credits.filter(c => c.amount < 0).reduce((s, c) => s + c.amount, 0)).toLocaleString()}</p></div>
+              <div><p className="text-xs text-gray-400">Total Added</p><p className="font-bold text-green-600">{received.reduce((s, c) => s + (c.amount ?? 0), 0).toLocaleString()}</p></div>
+              <div><p className="text-xs text-gray-400">Total Spent</p><p className="font-bold text-red-600">{spentByJob.reduce((s, j) => s + (j.totalSpent ?? 0), 0).toLocaleString()}</p></div>
             </div>
-            <div className="grid grid-cols-1 divide-y divide-gray-50">
-              <div className="grid grid-cols-4 gap-2 py-2 text-[10px] font-bold text-gray-400 uppercase">
-                <div className="col-span-2">Description</div>
-                <div className="text-right">Amount</div>
-                <div className="text-right">Balance after</div>
-              </div>
-              {credits.map(c => {
-                const labelMap: Record<string, string> = {
-                  job_batch: 'Per video usage',
-                  job_usage: 'Per video usage',
-                  job_deduct: 'Per video usage',
-                  purchase: 'Credit purchase',
-                  admin_grant: 'Admin grant',
-                  admin_deduct: 'Admin deduction',
-                  free_signup: 'Sign-up bonus',
-                  signup_bonus: 'Sign-up bonus',
-                  referral: 'Referral bonus',
-                  refund: 'Refund',
-                  plan_upgrade: 'Plan upgrade bonus',
-                  adjustment: 'Manual adjustment',
-                };
-                const label = labelMap[c.source_type] || c.source_type?.replace(/_/g, ' ');
-                const detail = c.description && c.description !== label ? c.description : null;
-                return (
-                  <div key={c.id} className="grid grid-cols-4 gap-2 py-2.5 text-xs items-center">
-                    <div className="col-span-2">
-                      <p className="font-medium text-gray-800 capitalize">{label}</p>
-                      {detail && <p className="text-gray-400 text-[10px] mt-0.5 truncate">{detail}</p>}
-                      <p className="text-gray-400 text-[10px] mt-0.5">{new Date(c.created_at).toLocaleString()}</p>
+
+            {/* Credits Spent — per video */}
+            <div>
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Credits Spent — Per Video</h3>
+              <div className="divide-y divide-gray-100 rounded-lg border border-gray-100 overflow-hidden">
+                {spentByJob.length === 0 && (
+                  <p className="text-xs text-gray-400 px-3 py-4">No credits spent yet.</p>
+                )}
+                {spentByJob.slice(spentPage * CREDITS_PER_PAGE, (spentPage + 1) * CREDITS_PER_PAGE).map((tx: any) => (
+                  <div key={tx.jobId ?? tx.latestDate} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 transition-colors">
+                    {tx.job?.thumbnail ? (
+                      <img src={tx.job.thumbnail} alt="" className="w-12 h-9 object-cover rounded shrink-0 bg-gray-100" />
+                    ) : (
+                      <div className="w-12 h-9 bg-gray-100 rounded shrink-0 flex items-center justify-center text-gray-300 text-xs">▶</div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-gray-800 truncate">{tx.job?.video_title ?? 'Unknown video'}</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">
+                        {(tx.job?.downloaded_comments ?? 0).toLocaleString()} comments · {new Date(tx.latestDate).toLocaleString()}
+                      </p>
                     </div>
-                    <div className="text-right">
-                      <span className={`font-bold font-mono ${c.amount > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {c.amount > 0 ? '+' : ''}{c.amount.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="text-right text-gray-500 font-mono">
-                      {(c.balance_after ?? 0).toLocaleString()}
-                    </div>
+                    <span className="text-xs font-mono font-bold text-red-600 shrink-0">-{tx.totalSpent.toLocaleString()}</span>
                   </div>
-                );
-              })}
-            </div>
-            {credits.length === 0 && <p className="text-sm text-gray-400 py-4">No credit history</p>}
-            {creditsCount > PAGE_SIZE && (
-              <div className="flex items-center justify-between pt-4 border-t border-gray-100 mt-2">
-                <p className="text-xs text-gray-400">
-                  {((creditsPage - 1) * PAGE_SIZE) + 1}–{Math.min(creditsPage * PAGE_SIZE, creditsCount)} of {creditsCount.toLocaleString()}
-                </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    disabled={creditsPage <= 1}
-                    onClick={() => setCreditsPage(p => p - 1)}
-                    className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  >
-                    ← Prev
-                  </button>
-                  <span className="text-xs text-gray-500 font-medium">Page {creditsPage} of {Math.ceil(creditsCount / PAGE_SIZE)}</span>
-                  <button
-                    disabled={creditsPage >= Math.ceil(creditsCount / PAGE_SIZE)}
-                    onClick={() => setCreditsPage(p => p + 1)}
-                    className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  >
-                    Next →
-                  </button>
-                </div>
+                ))}
               </div>
-            )}
+              {spentByJob.length > CREDITS_PER_PAGE && (
+                <div className="flex items-center justify-between pt-3">
+                  <p className="text-xs text-gray-400">{spentPage * CREDITS_PER_PAGE + 1}–{Math.min((spentPage + 1) * CREDITS_PER_PAGE, spentByJob.length)} of {spentByJob.length}</p>
+                  <div className="flex gap-2">
+                    <button disabled={spentPage === 0} onClick={() => setSpentPage(p => p - 1)} className="text-xs px-2.5 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40">← Prev</button>
+                    <button disabled={(spentPage + 1) * CREDITS_PER_PAGE >= spentByJob.length} onClick={() => setSpentPage(p => p + 1)} className="text-xs px-2.5 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40">Next →</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Credits Received */}
+            <div>
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Credits Received</h3>
+              <div className="divide-y divide-gray-100 rounded-lg border border-gray-100 overflow-hidden">
+                {received.length === 0 && (
+                  <p className="text-xs text-gray-400 px-3 py-4">No credits received yet.</p>
+                )}
+                {received.slice(receivedPage * CREDITS_PER_PAGE, (receivedPage + 1) * CREDITS_PER_PAGE).map((c: any) => {
+                  const labelMap: Record<string, string> = {
+                    purchase: 'Credit purchase',
+                    admin_grant: 'Admin grant',
+                    free_signup: 'Sign-up bonus',
+                    signup_bonus: 'Sign-up bonus',
+                    referral: 'Referral bonus',
+                    refund: 'Refund',
+                    plan_upgrade: 'Plan upgrade bonus',
+                    adjustment: 'Manual adjustment',
+                  };
+                  const label = labelMap[c.source_type] || c.description || c.source_type?.replace(/_/g, ' ');
+                  return (
+                    <div key={c.id} className="flex items-center justify-between px-3 py-2.5 hover:bg-gray-50 transition-colors">
+                      <div>
+                        <p className="text-xs font-medium text-gray-800 capitalize">{label}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">{new Date(c.created_at).toLocaleString()}</p>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-green-600 shrink-0">+{c.amount.toLocaleString()}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {received.length > CREDITS_PER_PAGE && (
+                <div className="flex items-center justify-between pt-3">
+                  <p className="text-xs text-gray-400">{receivedPage * CREDITS_PER_PAGE + 1}–{Math.min((receivedPage + 1) * CREDITS_PER_PAGE, received.length)} of {received.length}</p>
+                  <div className="flex gap-2">
+                    <button disabled={receivedPage === 0} onClick={() => setReceivedPage(p => p - 1)} className="text-xs px-2.5 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40">← Prev</button>
+                    <button disabled={(receivedPage + 1) * CREDITS_PER_PAGE >= received.length} onClick={() => setReceivedPage(p => p + 1)} className="text-xs px-2.5 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40">Next →</button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

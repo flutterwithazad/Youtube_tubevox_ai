@@ -206,22 +206,48 @@ router.get('/:id/payments', async (req, res) => {
   }
 });
 
-// User credit history
+// User credit history — returns per-video spending + received credits
 router.get('/:id/credits', async (req, res) => {
   try {
     requireAdmin(req);
     const supabase = createSupabaseAdmin();
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = 25;
-    const from = (page - 1) * limit;
-    const { data, count, error } = await supabase
-      .from('credit_ledger')
-      .select('*', { count: 'exact' })
-      .eq('user_id', req.params.id)
-      .order('created_at', { ascending: false })
-      .range(from, from + limit - 1);
-    if (error) throw error;
-    return res.json({ data, count, page, limit });
+    const userId = req.params.id;
+
+    const [debitsRes, creditsRes, jobsRes] = await Promise.all([
+      // All debit rows (job usage)
+      supabase.from('credit_ledger').select('*').eq('user_id', userId).lt('amount', 0).order('created_at', { ascending: false }),
+      // All positive rows (purchases, grants, etc.)
+      supabase.from('credit_ledger').select('*').eq('user_id', userId).gt('amount', 0).order('created_at', { ascending: false }),
+      // Jobs to get video titles / thumbnails
+      supabase.from('jobs').select('id,video_title,channel_name,thumbnail,downloaded_comments,status,created_at').eq('user_id', userId).order('created_at', { ascending: false }),
+    ]);
+
+    // Group debits by source_id (job ID)
+    const grouped = new Map<string, any>();
+    for (const row of debitsRes.data ?? []) {
+      const key = row.source_id ?? `no-job-${row.id}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.totalSpent += Math.abs(row.amount);
+        if (new Date(row.created_at) > new Date(existing.latestDate)) {
+          existing.latestDate = row.created_at;
+        }
+      } else {
+        const job = (jobsRes.data ?? []).find(j => j.id === row.source_id);
+        grouped.set(key, {
+          jobId: row.source_id,
+          totalSpent: Math.abs(row.amount),
+          latestDate: row.created_at,
+          job,
+        });
+      }
+    }
+
+    const spentByJob = Array.from(grouped.values()).sort(
+      (a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime()
+    );
+
+    return res.json({ spentByJob, received: creditsRes.data ?? [] });
   } catch (e: any) {
     return res.status(500).json({ error: e.message });
   }
