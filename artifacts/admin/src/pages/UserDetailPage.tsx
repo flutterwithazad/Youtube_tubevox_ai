@@ -241,11 +241,13 @@ export default function UserDetailPage() {
                   plan_upgrade: 'Plan upgrade bonus',
                   adjustment: 'Manual adjustment',
                 };
-                const label = c.description || labelMap[c.source_type] || c.source_type?.replace(/_/g, ' ');
+                const label = labelMap[c.source_type] || c.source_type?.replace(/_/g, ' ');
+                const detail = c.description && c.description !== label ? c.description : null;
                 return (
                   <div key={c.id} className="grid grid-cols-4 gap-2 py-2.5 text-xs items-center">
                     <div className="col-span-2">
                       <p className="font-medium text-gray-800 capitalize">{label}</p>
+                      {detail && <p className="text-gray-400 text-[10px] mt-0.5 truncate">{detail}</p>}
                       <p className="text-gray-400 text-[10px] mt-0.5">{new Date(c.created_at).toLocaleString()}</p>
                     </div>
                     <div className="text-right">
