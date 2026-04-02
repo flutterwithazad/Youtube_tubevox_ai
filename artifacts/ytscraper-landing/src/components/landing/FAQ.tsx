@@ -21,8 +21,7 @@ export function FAQ({ freeCredits = '500' }: Props) {
     { q: "Can I scrape entire channels?", a: "Absolutely. You can paste a channel URL and we will extract comments from their most recent videos, or you can specify exact videos to include in a bulk run." },
     { q: "What formats can I export to?", a: "We currently support CSV (great for Excel/Numbers), JSON (great for developers), and direct sync to Google Sheets." },
     { q: "Will I get blocked by YouTube?", a: "No. YTScraper runs on our distributed cloud infrastructure, not your browser. You use our IPs and proxies, so your personal YouTube account is never at risk." },
-    { q: "Does it scrape replies to comments?", a: "Yes, you can choose to include or exclude nested replies in your export settings before downloading." },
-    { q: "Can I filter comments before downloading?", a: "Yes, our dashboard allows you to filter by keyword, minimum likes, date ranges, and language before you spend your credits on a download." }
+    { q: "Does it scrape replies to comments?", a: "Yes, you can choose to include or exclude nested replies in your export settings before downloading." }
   ];
 
   return (

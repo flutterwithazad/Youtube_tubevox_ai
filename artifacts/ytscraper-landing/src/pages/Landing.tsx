@@ -6,6 +6,7 @@ import { UseCases } from '@/components/landing/UseCases';
 import { DatasetPreview } from '@/components/landing/DatasetPreview';
 import { HowItWorks } from '@/components/landing/HowItWorks';
 import { Testimonials } from '@/components/landing/Testimonials';
+import { FAQ } from '@/components/landing/FAQ';
 import { Pricing } from '@/components/landing/Pricing';
 import { Footer } from '@/components/landing/Footer';
 import { Reveal } from '@/components/landing/Reveal';
@@ -63,6 +64,7 @@ export default function Landing() {
         <DatasetPreview />
         <HowItWorks />
         <Testimonials />
+        <FAQ freeCredits={freeCredits} />
         <Pricing freeCredits={freeCredits} packages={packages} loading={loading} />
         <FinalCTA freeCredits={freeCredits} loading={loading} />
       </main>
