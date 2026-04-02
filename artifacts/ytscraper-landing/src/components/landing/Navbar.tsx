@@ -44,7 +44,6 @@ export function Navbar() {
           <button onClick={() => scrollTo('features')} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Features</button>
           <button onClick={() => scrollTo('how-it-works')} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">How it works</button>
           <button onClick={() => scrollTo('pricing')} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Pricing</button>
-          <button onClick={() => scrollTo('faq')} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">FAQ</button>
         </nav>
 
         {/* Desktop CTAs */}
@@ -73,7 +72,6 @@ export function Navbar() {
           <button onClick={() => scrollTo('features')} className="text-left font-medium p-2">Features</button>
           <button onClick={() => scrollTo('how-it-works')} className="text-left font-medium p-2">How it works</button>
           <button onClick={() => scrollTo('pricing')} className="text-left font-medium p-2">Pricing</button>
-          <button onClick={() => scrollTo('faq')} className="text-left font-medium p-2">FAQ</button>
           <hr className="border-border" />
           <a href="/login" className="font-semibold p-2">Log in</a>
           <a href="/signup" className="w-full text-center font-bold bg-primary text-primary-foreground px-5 py-3 rounded-xl shadow-md">
