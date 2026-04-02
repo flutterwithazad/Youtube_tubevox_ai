@@ -30,6 +30,7 @@ export default function ContactSubmissionsPage() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -56,7 +57,7 @@ export default function ContactSubmissionsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDeleteConfirm = async (id: string) => {
     setDeletingId(id);
     try {
       await api.delete(`/admin/contact-submissions/${id}`);
@@ -67,6 +68,7 @@ export default function ContactSubmissionsPage() {
       toast.error(e.message);
     } finally {
       setDeletingId(null);
+      setConfirmId(null);
     }
   };
 
@@ -155,14 +157,32 @@ export default function ContactSubmissionsPage() {
                       >
                         Reply via email
                       </a>
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        disabled={deletingId === item.id}
-                        className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 disabled:opacity-40 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        {deletingId === item.id ? 'Deleting...' : 'Delete'}
-                      </button>
+                      {confirmId === item.id ? (
+                        <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                          <span className="text-xs text-red-700 font-medium">Delete this message?</span>
+                          <button
+                            onClick={() => handleDeleteConfirm(item.id)}
+                            disabled={deletingId === item.id}
+                            className="text-xs bg-red-600 hover:bg-red-700 text-white font-semibold px-2 py-0.5 rounded disabled:opacity-50 transition-colors"
+                          >
+                            {deletingId === item.id ? 'Deleting…' : 'Yes, delete'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmId(null)}
+                            className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmId(item.id)}
+                          className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
