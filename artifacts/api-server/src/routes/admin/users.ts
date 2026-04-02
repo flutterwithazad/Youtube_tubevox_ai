@@ -238,6 +238,7 @@ router.get('/:id/credits', async (req, res) => {
           jobId: row.source_id,
           totalSpent: Math.abs(row.amount),
           latestDate: row.created_at,
+          balanceAfter: row.balance_after,
           job,
         });
       }

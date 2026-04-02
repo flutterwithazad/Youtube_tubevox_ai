@@ -244,7 +244,12 @@ export default function UserDetailPage() {
                         {(tx.job?.downloaded_comments ?? 0).toLocaleString()} comments · {new Date(tx.latestDate).toLocaleString()}
                       </p>
                     </div>
-                    <span className="text-xs font-mono font-bold text-red-600 shrink-0">-{tx.totalSpent.toLocaleString()}</span>
+                    <div className="text-right shrink-0">
+                      <span className="text-xs font-mono font-bold text-red-600 block">-{tx.totalSpent.toLocaleString()}</span>
+                      {tx.balanceAfter != null && (
+                        <span className="text-[10px] text-gray-400 font-mono">bal: {tx.balanceAfter.toLocaleString()}</span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -284,7 +289,12 @@ export default function UserDetailPage() {
                         <p className="text-xs font-medium text-gray-800 capitalize">{label}</p>
                         <p className="text-[10px] text-gray-400 mt-0.5">{new Date(c.created_at).toLocaleString()}</p>
                       </div>
-                      <span className="text-xs font-mono font-bold text-green-600 shrink-0">+{c.amount.toLocaleString()}</span>
+                      <div className="text-right shrink-0">
+                        <span className="text-xs font-mono font-bold text-green-600 block">+{c.amount.toLocaleString()}</span>
+                        {c.balance_after != null && (
+                          <span className="text-[10px] text-gray-400 font-mono">bal: {c.balance_after.toLocaleString()}</span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
