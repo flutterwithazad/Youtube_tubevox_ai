@@ -16,6 +16,7 @@ import adminIpBlocklistRouter from "./admin/ip-blocklist.js";
 import adminAuditLogRouter from "./admin/audit-log.js";
 import adminAdminsRouter from "./admin/admins.js";
 import adminSocialLinksRouter from "./admin/social-links.js";
+import adminContactSubmissionsRouter from "./admin/contact-submissions.js";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use("/admin/ip-blocklist", adminIpBlocklistRouter);
 router.use("/admin/audit-log", adminAuditLogRouter);
 router.use("/admin/admins", adminAdminsRouter);
 router.use("/admin/social-links", adminSocialLinksRouter);
+router.use("/admin/contact-submissions", adminContactSubmissionsRouter);
 
 export default router;
