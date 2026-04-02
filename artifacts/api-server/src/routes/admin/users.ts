@@ -211,9 +211,17 @@ router.get('/:id/credits', async (req, res) => {
   try {
     requireAdmin(req);
     const supabase = createSupabaseAdmin();
-    const { data, error } = await supabase.from('credit_ledger').select('*').eq('user_id', req.params.id).order('created_at', { ascending: false }).limit(100);
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = 25;
+    const from = (page - 1) * limit;
+    const { data, count, error } = await supabase
+      .from('credit_ledger')
+      .select('*', { count: 'exact' })
+      .eq('user_id', req.params.id)
+      .order('created_at', { ascending: false })
+      .range(from, from + limit - 1);
     if (error) throw error;
-    return res.json({ data });
+    return res.json({ data, count, page, limit });
   } catch (e: any) {
     return res.status(500).json({ error: e.message });
   }
