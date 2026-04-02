@@ -43,14 +43,31 @@ router.get('/:id', async (req, res) => {
   try {
     const admin = requireAdmin(req);
     const supabase = createSupabaseAdmin();
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*,plans(name),subscriptions(*,plans(name)),user_credit_balance(balance)')
-      .eq('id', req.params.id)
-      .single();
-    if (error || !data) return res.status(404).json({ error: 'User not found' });
-    await logAdminAction({ adminId: admin.adminId, action: 'user.view', targetType: 'user', targetId: req.params.id });
-    return res.json(data);
+    const userId = req.params.id;
+
+    const [profileRes, ledgerRes, loginRes, authRes] = await Promise.all([
+      supabase.from('profiles').select('*,plans(name),subscriptions(*,plans(name))').eq('id', userId).single(),
+      // Real balance: sum all ledger amounts for this user
+      supabase.from('credit_ledger').select('amount').eq('user_id', userId),
+      // Last login: most recent successful login_history entry
+      supabase.from('login_history').select('created_at').eq('user_id', userId).eq('success', true).order('created_at', { ascending: false }).limit(1),
+      // Fallback: auth user last_sign_in_at
+      supabase.auth.admin.getUserById(userId),
+    ]);
+
+    if (profileRes.error || !profileRes.data) return res.status(404).json({ error: 'User not found' });
+
+    const realBalance = (ledgerRes.data ?? []).reduce((sum, row) => sum + (row.amount ?? 0), 0);
+    const lastLogin = loginRes.data?.[0]?.created_at ?? authRes.data?.user?.last_sign_in_at ?? null;
+
+    const result = {
+      ...profileRes.data,
+      real_credit_balance: realBalance,
+      last_login_at: lastLogin,
+    };
+
+    await logAdminAction({ adminId: admin.adminId, action: 'user.view', targetType: 'user', targetId: userId });
+    return res.json(result);
   } catch (e: any) {
     return res.status(500).json({ error: e.message });
   }

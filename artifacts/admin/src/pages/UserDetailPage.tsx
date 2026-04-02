@@ -102,7 +102,7 @@ export default function UserDetailPage() {
           </div>
         </div>
         <div className="grid grid-cols-4 gap-4 mt-5 pt-5 border-t border-gray-100">
-          <div><p className="text-xs text-gray-400">Credit Balance</p><p className="text-lg font-bold text-gray-900">{(user.user_credit_balance?.balance ?? 0).toLocaleString()}</p></div>
+          <div><p className="text-xs text-gray-400">Credit Balance</p><p className="text-lg font-bold text-gray-900">{(user.real_credit_balance ?? 0).toLocaleString()}</p></div>
           <div><p className="text-xs text-gray-400">Plan</p><p className="text-lg font-bold text-gray-900">{user.plans?.name ?? 'Free'}</p></div>
           <div><p className="text-xs text-gray-400">Member since</p><p className="text-sm font-semibold text-gray-900">{new Date(user.created_at).toLocaleDateString()}</p></div>
           <div><p className="text-xs text-gray-400">Last login</p><p className="text-sm font-semibold text-gray-900">{user.last_login_at ? new Date(user.last_login_at).toLocaleDateString() : '—'}</p></div>
@@ -219,7 +219,7 @@ export default function UserDetailPage() {
           <div className="space-y-6">
             {/* Summary */}
             <div className="grid grid-cols-3 gap-4 p-3 bg-gray-50 rounded-lg text-sm">
-              <div><p className="text-xs text-gray-400">Balance</p><p className="font-bold">{(user.user_credit_balance?.balance ?? 0).toLocaleString()}</p></div>
+              <div><p className="text-xs text-gray-400">Balance</p><p className="font-bold">{(user.real_credit_balance ?? 0).toLocaleString()}</p></div>
               <div><p className="text-xs text-gray-400">Total Added</p><p className="font-bold text-green-600">{received.reduce((s, c) => s + (c.amount ?? 0), 0).toLocaleString()}</p></div>
               <div><p className="text-xs text-gray-400">Total Spent</p><p className="font-bold text-red-600">{spentByJob.reduce((s, j) => s + (j.totalSpent ?? 0), 0).toLocaleString()}</p></div>
             </div>
