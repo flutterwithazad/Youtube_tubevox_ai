@@ -441,25 +441,34 @@ export default function Scrape() {
       const { data: { session: initialSession } } = await supabase.auth.getSession();
       if (!initialSession) { toast.error("Not authenticated"); return; }
 
-      // Server-side minimum credit check — enforced even if UI check is bypassed
-      try {
-        const balRes = await fetch('/api/credits/balance', {
-          headers: { Authorization: `Bearer ${initialSession.access_token}` },
-        });
-        const balData = await balRes.json();
-        const serverBalance = balData.balance ?? 0;
-        if (serverBalance < 100) {
-          toast.error(`You need at least 100 credits to start a scrape. Current balance: ${serverBalance.toLocaleString()}.`, {
-            duration: 6000,
-            action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+      // Backend minimum-credit check — only blocks when the server explicitly
+      // returns ok=false. Any network/auth error is ignored here; the edge
+      // function has its own credit guard and will fail cleanly if needed.
+      if (!resumeOpts) {
+        try {
+          const checkRes = await fetch('/api/credits/check', {
+            headers: { Authorization: `Bearer ${initialSession.access_token}` },
           });
-          setState("input");
-          setIsRunning(false);
-          refetchBalance();
-          return;
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            if (!checkData.ok) {
+              toast.error(
+                `You need at least 100 credits to start a scrape. Current balance: ${(checkData.balance ?? 0).toLocaleString()}.`,
+                {
+                  duration: 6000,
+                  action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+                }
+              );
+              setState("input");
+              setIsRunning(false);
+              refetchBalance();
+              return;
+            }
+          }
+          // Non-200 response (auth hiccup, server blip) → proceed; edge function handles it
+        } catch {
+          // Network error → proceed; edge function handles it
         }
-      } catch {
-        // If balance check fails, let the scrape proceed — the edge function will catch it
       }
 
       // For a resume, use the job's stored maxComments; for a fresh scrape, derive from chips.

@@ -116,15 +116,20 @@ serve(async (req) => {
     // On continuation invocations (startPageToken is set), credits have already
     // been partially deducted — just ensure at least 1 credit remains so the
     // per-batch atomic_credit_deduct can still run and stop naturally.
+    //
+    // MIN_FRESH_CREDITS: minimum required to START any fresh scrape (100).
+    // For "fetch all" mode we don't know the total up-front, but we still enforce
+    // this floor so users can't start a scrape they can't meaningfully progress.
+    const MIN_FRESH_CREDITS = 100;
     const isContinuation = !!startPageToken;
-    const creditsNeeded  = isContinuation ? 1 : (fetchAll ? 1 : commentTarget);
+    const creditsNeeded  = isContinuation ? 1 : (fetchAll ? MIN_FRESH_CREDITS : commentTarget);
 
     if (balance < creditsNeeded) {
       return json({
         error:          "insufficient_credits",
-        message:        "Not enough credits. Please top up.",
+        message:        `Not enough credits. You need at least ${creditsNeeded} to start (balance: ${balance}).`,
         balance,
-        credits_needed: fetchAll ? "unknown (all comments)" : creditsNeeded,
+        credits_needed: creditsNeeded,
       }, 402);
     }
 
