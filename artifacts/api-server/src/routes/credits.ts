@@ -179,14 +179,45 @@ router.get('/balance', async (req, res) => {
 
     const supabase = createSupabaseAdmin();
     const { data, error } = await supabase
-      .from('user_credit_balance')
-      .select('balance')
-      .eq('user_id', user.id)
-      .maybeSingle();
+      .from('credit_ledger')
+      .select('amount')
+      .eq('user_id', user.id);
 
     if (error) throw error;
 
-    return res.json({ balance: data?.balance ?? 0, user_id: user.id });
+    const balance = (data ?? []).reduce((sum, row) => sum + (row.amount ?? 0), 0);
+    return res.json({ balance, user_id: user.id });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Reliable pre-flight check: can this user start a scrape?
+// Computes balance directly from credit_ledger (not via the view) so it is
+// never stale and never returns 0 on a view-query failure.
+router.get('/check', async (req, res) => {
+  try {
+    const user = await resolveUser(req, res);
+    if (!user) return;
+
+    const supabase = createSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('credit_ledger')
+      .select('amount')
+      .eq('user_id', user.id);
+
+    if (error) throw error;
+
+    const balance = (data ?? []).reduce((sum, row) => sum + (row.amount ?? 0), 0);
+    const MIN_CREDITS = 100;
+    const canStart = balance >= MIN_CREDITS;
+
+    return res.json({
+      ok: canStart,
+      balance,
+      min_required: MIN_CREDITS,
+      ...(canStart ? {} : { error: 'insufficient_credits' }),
+    });
   } catch (e: any) {
     return res.status(500).json({ error: e.message });
   }
