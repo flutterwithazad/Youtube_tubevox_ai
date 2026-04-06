@@ -55,8 +55,9 @@ serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     );
 
-    const { data: { user } } = await supabaseUser.auth.getUser();
-    if (!user) return json({ error: "Unauthorized" }, 401);
+    const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
+    if (authErr) console.error("Auth error:", authErr.message);
+    if (!user) return json({ error: "Unauthorized", details: authErr?.message }, 401);
 
     // ── 2. Parse body ────────────────────────────────────────
     // Comments fetched per Edge Function invocation (measured at page boundaries).
@@ -285,13 +286,17 @@ serve(async (req) => {
           return false; // stop safely on RPC error
         }
 
-        if (!deductResult?.ok) {
+        const realDeduction = (deductResult as any).deducted ?? 0;
+
+        if (!deductResult?.ok || (deductResult as any).exhausted) {
           console.log(`Insufficient credits (balance=${deductResult?.balance}) — flagging creditExhausted`);
           creditExhausted = true;
+          creditsUsed += realDeduction; // Add what was actually paid for
           return false;
         }
 
-        creditsUsed += batchInserted;
+        creditsUsed += realDeduction;
+        console.log(`Deducted ${realDeduction} credits. Running total: ${creditsUsed}`);
       }
 
       return true;
