@@ -122,7 +122,7 @@ serve(async (req) => {
     // this floor so users can't start a scrape they can't meaningfully progress.
     const MIN_FRESH_CREDITS = 100;
     const isContinuation = !!startPageToken;
-    const creditsNeeded  = isContinuation ? 1 : (fetchAll ? MIN_FRESH_CREDITS : commentTarget);
+    const creditsNeeded  = isContinuation ? 1 : MIN_FRESH_CREDITS;
 
     if (balance < creditsNeeded) {
       return json({
