@@ -55,8 +55,9 @@ serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     );
 
-    const { data: { user } } = await supabaseUser.auth.getUser();
-    if (!user) return json({ error: "Unauthorized" }, 401);
+    const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
+    if (authErr) console.error("Auth error:", authErr.message);
+    if (!user) return json({ error: "Unauthorized", details: authErr?.message }, 401);
 
     // ── 2. Parse body ────────────────────────────────────────
     // Comments fetched per Edge Function invocation (measured at page boundaries).
@@ -116,15 +117,20 @@ serve(async (req) => {
     // On continuation invocations (startPageToken is set), credits have already
     // been partially deducted — just ensure at least 1 credit remains so the
     // per-batch atomic_credit_deduct can still run and stop naturally.
+    //
+    // MIN_FRESH_CREDITS: minimum required to START any fresh scrape (100).
+    // For "fetch all" mode we don't know the total up-front, but we still enforce
+    // this floor so users can't start a scrape they can't meaningfully progress.
+    const MIN_FRESH_CREDITS = 100;
     const isContinuation = !!startPageToken;
-    const creditsNeeded  = isContinuation ? 1 : (fetchAll ? 1 : commentTarget);
+    const creditsNeeded  = isContinuation ? 1 : MIN_FRESH_CREDITS;
 
     if (balance < creditsNeeded) {
       return json({
         error:          "insufficient_credits",
-        message:        "Not enough credits. Please top up.",
+        message:        `Not enough credits. You need at least ${creditsNeeded} to start (balance: ${balance}).`,
         balance,
-        credits_needed: fetchAll ? "unknown (all comments)" : creditsNeeded,
+        credits_needed: creditsNeeded,
       }, 402);
     }
 
@@ -280,49 +286,58 @@ serve(async (req) => {
           return false; // stop safely on RPC error
         }
 
-        if (!deductResult?.ok) {
+        const realDeduction = (deductResult as any).deducted ?? 0;
+
+        if (!deductResult?.ok || (deductResult as any).exhausted) {
           console.log(`Insufficient credits (balance=${deductResult?.balance}) — flagging creditExhausted`);
           creditExhausted = true;
+          creditsUsed += realDeduction; // Add what was actually paid for
           return false;
         }
 
-        creditsUsed += batchInserted;
+        creditsUsed += realDeduction;
+        console.log(`Deducted ${realDeduction} credits. Running total: ${creditsUsed}`);
       }
 
       return true;
     };
 
-    // ── 9. Stream-fetch comments via batch callback ──────────
-    // Each invocation fetches at most PER_INVOCATION_LIMIT comments.
-    // The backend chains invocations using the returned nextPageToken.
+    // ── 9. Stream-fetch comments via YouTube Data API v3 ─────────────────────
+    // Uses the official YouTube Data API v3 with key rotation.
+    // The YouTubeApi class is already constructed above (reused from getVideoMetadata).
     let nextPageToken: string | null = null;
+
     try {
-      const scrapeResult = await Promise.race([
+      console.log(`[JOB:${job.id.slice(0,8)}] Starting YouTube API scrape (target=${commentTarget === Infinity ? "all" : commentTarget})...`);
+
+      // Race the entire scrape against the safety timeout.
+      // fetchAllComments also has an internal 120s wall-clock check but we keep
+      // the outer race so a hung HTTP call can't block the edge function forever.
+      const result = await Promise.race([
         yt.fetchAllComments(
           job.id,
           videoId,
-          { ...filters, maxComments: commentTarget },
+          filters,
           commentTarget,
           onBatch,
-          startPageToken,    // resume from previous invocation (undefined on first call)
+          startPageToken ?? undefined,
           PER_INVOCATION_LIMIT,
         ),
         timeoutPromise,
       ]);
+
+      nextPageToken = result.nextPageToken;
       clearTimeout(safeTimeoutId!);
-      nextPageToken = scrapeResult.nextPageToken;
+      console.log(`[JOB:${job.id.slice(0,8)}] Scrape invocation done. Fetched: ${result.totalFetched}, nextToken: ${nextPageToken ? "yes" : "no"}`);
+
     } catch (fetchErr: any) {
       clearTimeout(safeTimeoutId!);
 
       if (fetchErr.message === "SAFE_TIMEOUT") {
-        // We hit the 120s safety limit before Deno's hard 150s kill.
-        // Return done:false so the frontend chains another invocation.
+        // Hit the 120s outer timeout — save the best available resume token so the
+        // frontend can chain another invocation without losing progress.
         console.log(`[JOB:${job.id.slice(0,8)}] Safe timeout reached — returning resume token`);
         const totalSoFar = alreadyFetched + totalInserted;
-        // Save the best available resume token so the frontend can continue
-        // after a page refresh. On timeout we fall back to startPageToken
-        // (the token this invocation started with) since nextPageToken is
-        // not available yet — the frontend will re-fetch at most one page.
         await supabase.from("jobs").update({
           status:              "running",
           downloaded_comments: totalSoFar,
@@ -332,7 +347,7 @@ serve(async (req) => {
         return json({
           success:       true,
           done:          false,
-          nextPageToken: startPageToken ?? null, // best approximation — frontend will re-call
+          nextPageToken: startPageToken ?? null,
           job_id:        job.id,
           video_title:   video.title,
           channel_name:  video.channelName,

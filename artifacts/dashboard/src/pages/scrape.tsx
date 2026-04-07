@@ -3,7 +3,7 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { extractVideoId, getVideoType } from "@/lib/utils/youtube";
 import { fetchVideoPreview, VideoPreview } from "@/lib/utils/youtubeOembed";
 import { toast } from "sonner";
-import { Settings, Loader2, StopCircle, CheckCircle2 } from "lucide-react";
+import { Loader2, StopCircle, CheckCircle2 } from "lucide-react";
 import { CommentExplorer } from "@/components/dashboard/CommentExplorer";
 import { useAuth } from "@/hooks/use-auth";
 import { useCredits } from "@/hooks/use-credits";
@@ -233,6 +233,48 @@ export default function Scrape() {
     checkActive();
   }, [user]);
 
+  useEffect(() => {
+    if (!activeJobId || !isRunning) return;
+
+    const syncOnFocus = async () => {
+      if (document.visibilityState === "visible") {
+        const { data: job } = await supabase
+          .from("jobs")
+          .select("*")
+          .eq("id", activeJobId)
+          .single();
+
+        if (job && (job.status === "completed" || job.status === "cancelled" || job.status === "failed")) {
+          // If the job finished while the user was away, the internal loop
+          // might be stuck or discarded. This focus-sync force-transitions the UI.
+          console.log(`[SYNC] Job ${activeJobId} reached terminal state ${job.status} while backgrounded.`);
+
+          // Helper clean-up (shared with polling block above)
+          const count = job.downloaded_comments ?? 0;
+          setLiveCommentCount(count);
+          setActiveJob(job);
+          setIsRunning(false);
+          loopRunningRef.current = false;
+          reconnectedRef.current = false;
+          setIsReconnected(false);
+          refetchBalance();
+
+          if (job.status === "completed") {
+            setState("completed");
+          } else if (job.status === "cancelled" && count >= 100) {
+            setIsPartialResult(true);
+            setState("completed");
+          } else {
+            setState("input");
+          }
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", syncOnFocus);
+    return () => document.removeEventListener("visibilitychange", syncOnFocus);
+  }, [activeJobId, isRunning, refetchBalance]);
+
   // ── Reconnect polling ────────────────────────────────────────────────────────
   // When the page loads while a job is already running (e.g. after navigation
   // within the SPA), we reconnect instead of cancelling. This effect polls the
@@ -441,25 +483,34 @@ export default function Scrape() {
       const { data: { session: initialSession } } = await supabase.auth.getSession();
       if (!initialSession) { toast.error("Not authenticated"); return; }
 
-      // Server-side minimum credit check — enforced even if UI check is bypassed
-      try {
-        const balRes = await fetch('/api/credits/balance', {
-          headers: { Authorization: `Bearer ${initialSession.access_token}` },
-        });
-        const balData = await balRes.json();
-        const serverBalance = balData.balance ?? 0;
-        if (serverBalance < 100) {
-          toast.error(`You need at least 100 credits to start a scrape. Current balance: ${serverBalance.toLocaleString()}.`, {
-            duration: 6000,
-            action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+      // Backend minimum-credit check — only blocks when the server explicitly
+      // returns ok=false. Any network/auth error is ignored here; the edge
+      // function has its own credit guard and will fail cleanly if needed.
+      if (!resumeOpts) {
+        try {
+          const checkRes = await fetch('/api/credits/check', {
+            headers: { Authorization: `Bearer ${initialSession.access_token}` },
           });
-          setState("input");
-          setIsRunning(false);
-          refetchBalance();
-          return;
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            if (!checkData.ok) {
+              toast.error(
+                `You need at least 100 credits to start a scrape. Current balance: ${(checkData.balance ?? 0).toLocaleString()}.`,
+                {
+                  duration: 6000,
+                  action: { label: 'Buy credits →', onClick: () => { window.location.href = '/dashboard/credits'; } },
+                }
+              );
+              setState("input");
+              setIsRunning(false);
+              refetchBalance();
+              return;
+            }
+          }
+          // Non-200 response (auth hiccup, server blip) → proceed; edge function handles it
+        } catch {
+          // Network error → proceed; edge function handles it
         }
-      } catch {
-        // If balance check fails, let the scrape proceed — the edge function will catch it
       }
 
       // For a resume, use the job's stored maxComments; for a fresh scrape, derive from chips.
@@ -1019,12 +1070,6 @@ export default function Scrape() {
                       )}
                     </div>
 
-                    <div className="pt-2 border-t border-gray-100">
-                      <button type="button" className="flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors">
-                        <Settings className="w-4 h-4" />
-                        Advanced options (Coming soon)
-                      </button>
-                    </div>
                   </div>
                 )}
 
