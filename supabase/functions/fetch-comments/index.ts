@@ -17,7 +17,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { YouTubeApi, extractVideoId } from "./youtubeApi.ts";
-import { FetchFilters } from "./types.ts";
+import { InnerTube } from "./innerTube.ts";
+import { FetchFilters, Comment } from "./types.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -303,24 +304,41 @@ serve(async (req) => {
     };
 
     // ── 9. Stream-fetch comments via batch callback ──────────
-    // Each invocation fetches at most PER_INVOCATION_LIMIT comments.
-    // The backend chains invocations using the returned nextPageToken.
+    // NEW: We use InnerTube for 100% Heart/Pin accuracy and zero quota usage.
+    const deepScraper = new InnerTube(videoId);
     let nextPageToken: string | null = null;
+    let totalFetchedInThisCall = 0;
+
     try {
-      const scrapeResult = await Promise.race([
-        yt.fetchAllComments(
-          job.id,
-          videoId,
-          { ...filters, maxComments: commentTarget },
-          commentTarget,
-          onBatch,
-          startPageToken,    // resume from previous invocation (undefined on first call)
-          PER_INVOCATION_LIMIT,
-        ),
-        timeoutPromise,
-      ]);
-      clearTimeout(safeTimeoutId!);
-      nextPageToken = scrapeResult.nextPageToken;
+      let currentToken: string | null = startPageToken || await deepScraper.getInitialToken();
+      
+      while (currentToken && totalFetchedInThisCall < PER_INVOCATION_LIMIT) {
+        const { comments, nextToken } = await deepScraper.fetchPage(currentToken);
+        if (comments.length === 0) break;
+
+        // Apply filters (minLikes, etc.)
+        const filtered = comments.map(c => ({ ...c, job_id: job.id })).filter(c => {
+          if (filters.minLikes && (c.likes ?? 0) < filters.minLikes) return false;
+          if (filters.keyword) {
+             const kws = filters.keyword.split(",").map(k => k.trim().toLowerCase());
+             if (!kws.some(k => c.text.toLowerCase().includes(k))) return false;
+          }
+          return true;
+        });
+
+        if (filtered.length > 0) {
+          totalFetchedInThisCall += filtered.length;
+          const shouldContinue = await onBatch(filtered, alreadyFetched + totalFetchedInThisCall);
+          if (!shouldContinue) {
+             currentToken = null;
+             break;
+          }
+        }
+
+        currentToken = nextToken;
+        if (totalFetchedInThisCall >= PER_INVOCATION_LIMIT) break;
+      }
+      nextPageToken = currentToken;
     } catch (fetchErr: any) {
       clearTimeout(safeTimeoutId!);
 

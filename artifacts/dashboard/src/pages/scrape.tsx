@@ -233,6 +233,48 @@ export default function Scrape() {
     checkActive();
   }, [user]);
 
+  useEffect(() => {
+    if (!activeJobId || !isRunning) return;
+
+    const syncOnFocus = async () => {
+      if (document.visibilityState === "visible") {
+        const { data: job } = await supabase
+          .from("jobs")
+          .select("*")
+          .eq("id", activeJobId)
+          .single();
+
+        if (job && (job.status === "completed" || job.status === "cancelled" || job.status === "failed")) {
+          // If the job finished while the user was away, the internal loop
+          // might be stuck or discarded. This focus-sync force-transitions the UI.
+          console.log(`[SYNC] Job ${activeJobId} reached terminal state ${job.status} while backgrounded.`);
+
+          // Helper clean-up (shared with polling block above)
+          const count = job.downloaded_comments ?? 0;
+          setLiveCommentCount(count);
+          setActiveJob(job);
+          setIsRunning(false);
+          loopRunningRef.current = false;
+          reconnectedRef.current = false;
+          setIsReconnected(false);
+          refetchBalance();
+
+          if (job.status === "completed") {
+            setState("completed");
+          } else if (job.status === "cancelled" && count >= 100) {
+            setIsPartialResult(true);
+            setState("completed");
+          } else {
+            setState("input");
+          }
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", syncOnFocus);
+    return () => document.removeEventListener("visibilitychange", syncOnFocus);
+  }, [activeJobId, isRunning, refetchBalance]);
+
   // ── Reconnect polling ────────────────────────────────────────────────────────
   // When the page loads while a job is already running (e.g. after navigation
   // within the SPA), we reconnect instead of cancelling. This effect polls the
