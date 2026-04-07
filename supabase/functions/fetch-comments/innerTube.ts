@@ -30,17 +30,20 @@ export class InnerTube {
     // YouTube sometimes uses escaped quotes (\u0022) in their script tags
     const cleanHtml = html.replace(/\\u0022/g, '"');
 
-    // Look for the continuation token specifically in the 'itemSection' which holds comments
-    const m = cleanHtml.match(/"itemSectionRenderer":\{"contents":\[\{"continuationItemRenderer":\{"continuationEndpoint":\{"continuationCommand":\{"token":"([a-zA-Z0-9_-]+)"/);
-    if (!m) {
-      // Fallback: look for ANY long token that starts with 'continuation'
-      const fallback = cleanHtml.match(/"continuation":"([a-zA-Z0-9_-]{80,})"/); // Comments tokens are typically 100+ chars
-      if (fallback) return fallback[1];
-      
-      console.log("[INNER-TUBE] Could not find any continuation token in HTML");
-      return null;
+    // NEW (Browser-Verified): Look specifically for the 'comment-item-section' block
+    // This is the only way to avoid grabbing ad or sidebar continuation tokens.
+    const commentSectionMatch = cleanHtml.match(/"sectionIdentifier":"comment-item-section"[^]*?"token":"([a-zA-Z0-9_-]{80,})"/);
+    
+    if (commentSectionMatch) {
+      return commentSectionMatch[1];
     }
-    return m[1];
+
+    // Fallback: look for ANY extremely long token (comment tokens are typically the longest on the page)
+    const fallback = cleanHtml.match(/"token":"([a-zA-Z0-9_-]{100,})"/);
+    if (fallback) return fallback[1];
+    
+    console.log("[INNER-TUBE] Could not find any continuation token in HTML");
+    return null;
   }
 
   /**
