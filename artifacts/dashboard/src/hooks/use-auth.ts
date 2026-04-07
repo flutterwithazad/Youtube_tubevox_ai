@@ -62,11 +62,14 @@ export function useAuth() {
         setUser(u);
         userIdRef.current = u?.id ?? null;
         if (u) {
-          // Hold AuthGuard in loading state until we know if the user is suspended.
-          // Without this, AuthGuard redirects to /scrape before the profile check
-          // completes, causing a 1-second flash before suspension kicks them out.
-          setIsLoading(true);
-          fetchProfile(u.id).finally(() => setIsLoading(false));
+          // Only show 'Loading...' if we don't already have a user/profile
+          // This stops the whole page from 'blinking' on tab focus/token refresh.
+          if (!user || !profile) {
+            setIsLoading(true);
+          }
+          fetchProfile(u.id).finally(() => {
+            setIsLoading(false);
+          });
         } else {
           setProfile(null);
           setIsLoading(false);
