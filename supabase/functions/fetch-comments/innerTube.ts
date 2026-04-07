@@ -27,9 +27,15 @@ export class InnerTube {
     });
     const html = await res.text();
     
-    // Look for the continuation token in the initial data JSON
-    const m = html.match(/"continuation":"([a-zA-Z0-9_-]+)"/);
-    return m ? m[1] : null;
+    // Look for the continuation token specifically in the 'itemSection' which holds comments
+    // YouTube embeds this in a large JSON object called 'ytInitialData'
+    const m = html.match(/"itemSectionRenderer":\{"contents":\[\{"continuationItemRenderer":\{"continuationEndpoint":\{"continuationCommand":\{"token":"([a-zA-Z0-9_-]+)"/);
+    if (!m) {
+      // Fallback: look for ANY token that looks like a comments token
+      const fallback = html.match(/"continuation":"([a-zA-Z0-9_-]{50,})"/); // Comments tokens are usually very long
+      return fallback ? fallback[1] : null;
+    }
+    return m[1];
   }
 
   /**

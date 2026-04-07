@@ -310,20 +310,30 @@ serve(async (req) => {
     let totalFetchedInThisCall = 0;
 
     try {
+      console.log(`[JOB:${job.id.slice(0,8)}] Starting InnerTube scrape...`);
       let currentToken: string | null = startPageToken || await deepScraper.getInitialToken();
+      console.log(`[JOB:${job.id.slice(0,8)}] Initial token: ${currentToken ? "found" : "NOT FOUND"}`);
       
       while (currentToken && totalFetchedInThisCall < PER_INVOCATION_LIMIT) {
-        const { comments, nextToken } = await deepScraper.fetchPage(currentToken);
-        if (comments.length === 0) break;
+        // Race the fetch against our safety timeout
+        const { comments, nextToken }: any = await Promise.race([
+          deepScraper.fetchPage(currentToken),
+          timeoutPromise
+        ]);
+
+        if (!comments || comments.length === 0) {
+           console.log(`[JOB:${job.id.slice(0,8)}] No comments returned from page.`);
+           break;
+        }
 
         // Apply filters (minLikes, etc.)
-        const filtered = comments.map(c => ({ ...c, job_id: job.id })).filter(c => {
-          if (filters.minLikes && (c.likes ?? 0) < filters.minLikes) return false;
+        const filtered = comments.map((c: any) => ({ ...c, job_id: job.id })).filter((c: any) => {
           if (filters.onlyHearted && !c.heart) return false;
           if (filters.onlyPinned && !c.is_pinned) return false;
           if (filters.onlyPaid && !c.is_paid) return false;
+          if (filters.minLikes && (c.likes ?? 0) < filters.minLikes) return false;
           if (filters.keyword) {
-             const kws = filters.keyword.split(",").map(k => k.trim().toLowerCase());
+             const kws = (filters.keyword as string).split(",").map(k => k.trim().toLowerCase());
              if (!kws.some(k => c.text.toLowerCase().includes(k))) return false;
           }
           return true;
@@ -331,8 +341,10 @@ serve(async (req) => {
 
         if (filtered.length > 0) {
           totalFetchedInThisCall += filtered.length;
+          console.log(`[JOB:${job.id.slice(0,8)}] Flushed ${filtered.length} comments (Total In Call: ${totalFetchedInThisCall})`);
           const shouldContinue = await onBatch(filtered, alreadyFetched + totalFetchedInThisCall);
           if (!shouldContinue) {
+             console.log(`[JOB:${job.id.slice(0,8)}] Stopping (cancelled or out of credits)`);
              currentToken = null;
              break;
           }
@@ -342,6 +354,8 @@ serve(async (req) => {
         if (totalFetchedInThisCall >= PER_INVOCATION_LIMIT) break;
       }
       nextPageToken = currentToken;
+      clearTimeout(safeTimeoutId!);
+      console.log(`[JOB:${job.id.slice(0,8)}] Scrape invocation done. Next token: ${nextPageToken ? "yes" : "no"}`);
     } catch (fetchErr: any) {
       clearTimeout(safeTimeoutId!);
 
