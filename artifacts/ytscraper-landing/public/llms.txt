@@ -1,0 +1,37 @@
+# YTScraper
+
+> YTScraper is a web-based SaaS tool that lets researchers, marketers, and developers scrape and export YouTube comments at scale.
+
+## What it does
+
+YTScraper extracts comments from any YouTube video or channel and exports them to CSV, JSON, or Google Sheets. Users can filter comments by keywords, sentiment, pinned status, and creator hearts. The tool uses a credit-based pricing model with 1,000 free credits on signup — no credit card required.
+
+## Key features
+
+- Bulk comment scraping from YouTube videos and entire channels
+- Export formats: CSV, Excel, JSON, Google Sheets sync
+- Filters: keyword search, hearted comments, pinned comments, Super Chat (paid comments)
+- Credit-based pricing — credits never expire
+- No-code required — paste a YouTube URL and download
+
+## Pricing
+
+- Free tier: 1,000 credits on signup
+- Starter Pack, Growth Pack, and Scale Pack available
+- Credits are consumed per comment scraped and never expire
+
+## Pages
+
+- [Home](https://tubevox.com/): Main landing page with features, pricing, and how-it-works
+- [About](https://tubevox.com/about): Company background
+- [Blog](https://tubevox.com/blog): Articles about YouTube data, research, and social listening
+- [Contact](https://tubevox.com/contact): Support and enquiries
+- [Privacy Policy](https://tubevox.com/privacy): How user data is handled
+- [Terms of Service](https://tubevox.com/terms): Legal terms
+- [Status](https://tubevox.com/status): Service uptime status
+
+## Social
+
+- Twitter/X: https://twitter.com/ytscraper
+- LinkedIn: https://linkedin.com/company/ytscraper
+- YouTube: https://youtube.com/channel/UC1mipgTfQUB03ggCqkb8ckA
