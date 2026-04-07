@@ -17,8 +17,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { YouTubeApi, extractVideoId } from "./youtubeApi.ts";
-import { InnerTube } from "./innerTube.ts";
-import { FetchFilters, Comment } from "./types.ts";
+import { FetchFilters } from "./types.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -303,71 +302,42 @@ serve(async (req) => {
       return true;
     };
 
-    // ── 9. Stream-fetch comments via batch callback ──────────
-    // NEW: We use InnerTube for 100% Heart/Pin accuracy and zero quota usage.
-    const deepScraper = new InnerTube(videoId);
+    // ── 9. Stream-fetch comments via YouTube Data API v3 ─────────────────────
+    // Uses the official YouTube Data API v3 with key rotation.
+    // The YouTubeApi class is already constructed above (reused from getVideoMetadata).
     let nextPageToken: string | null = null;
-    let totalFetchedInThisCall = 0;
 
     try {
-      console.log(`[JOB:${job.id.slice(0,8)}] Starting InnerTube scrape...`);
-      let currentToken: string | null = startPageToken || await deepScraper.getInitialToken();
-      console.log(`[JOB:${job.id.slice(0,8)}] Initial token: ${currentToken ? "found" : "NOT FOUND"}`);
-      
-      while (currentToken && totalFetchedInThisCall < PER_INVOCATION_LIMIT) {
-        // Race the fetch against our safety timeout
-        const { comments, nextToken }: any = await Promise.race([
-          deepScraper.fetchPage(currentToken),
-          timeoutPromise
-        ]);
+      console.log(`[JOB:${job.id.slice(0,8)}] Starting YouTube API scrape (target=${commentTarget === Infinity ? "all" : commentTarget})...`);
 
-        if (!comments || comments.length === 0) {
-           console.log(`[JOB:${job.id.slice(0,8)}] No comments returned from page.`);
-           break;
-        }
+      // Race the entire scrape against the safety timeout.
+      // fetchAllComments also has an internal 120s wall-clock check but we keep
+      // the outer race so a hung HTTP call can't block the edge function forever.
+      const result = await Promise.race([
+        yt.fetchAllComments(
+          job.id,
+          videoId,
+          filters,
+          commentTarget,
+          onBatch,
+          startPageToken ?? undefined,
+          PER_INVOCATION_LIMIT,
+        ),
+        timeoutPromise,
+      ]);
 
-        // Apply filters (minLikes, etc.)
-        const filtered = comments.map((c: any) => ({ ...c, job_id: job.id })).filter((c: any) => {
-          if (filters.onlyHearted && !c.heart) return false;
-          if (filters.onlyPinned && !c.is_pinned) return false;
-          if (filters.onlyPaid && !c.is_paid) return false;
-          if (filters.minLikes && (c.likes ?? 0) < filters.minLikes) return false;
-          if (filters.keyword) {
-             const kws = (filters.keyword as string).split(",").map(k => k.trim().toLowerCase());
-             if (!kws.some(k => c.text.toLowerCase().includes(k))) return false;
-          }
-          return true;
-        });
-
-        if (filtered.length > 0) {
-          totalFetchedInThisCall += filtered.length;
-          console.log(`[JOB:${job.id.slice(0,8)}] Flushed ${filtered.length} comments (Total In Call: ${totalFetchedInThisCall})`);
-          const shouldContinue = await onBatch(filtered, alreadyFetched + totalFetchedInThisCall);
-          if (!shouldContinue) {
-             console.log(`[JOB:${job.id.slice(0,8)}] Stopping (cancelled or out of credits)`);
-             currentToken = null;
-             break;
-          }
-        }
-
-        currentToken = nextToken;
-        if (totalFetchedInThisCall >= PER_INVOCATION_LIMIT) break;
-      }
-      nextPageToken = currentToken;
+      nextPageToken = result.nextPageToken;
       clearTimeout(safeTimeoutId!);
-      console.log(`[JOB:${job.id.slice(0,8)}] Scrape invocation done. Next token: ${nextPageToken ? "yes" : "no"}`);
+      console.log(`[JOB:${job.id.slice(0,8)}] Scrape invocation done. Fetched: ${result.totalFetched}, nextToken: ${nextPageToken ? "yes" : "no"}`);
+
     } catch (fetchErr: any) {
       clearTimeout(safeTimeoutId!);
 
       if (fetchErr.message === "SAFE_TIMEOUT") {
-        // We hit the 120s safety limit before Deno's hard 150s kill.
-        // Return done:false so the frontend chains another invocation.
+        // Hit the 120s outer timeout — save the best available resume token so the
+        // frontend can chain another invocation without losing progress.
         console.log(`[JOB:${job.id.slice(0,8)}] Safe timeout reached — returning resume token`);
         const totalSoFar = alreadyFetched + totalInserted;
-        // Save the best available resume token so the frontend can continue
-        // after a page refresh. On timeout we fall back to startPageToken
-        // (the token this invocation started with) since nextPageToken is
-        // not available yet — the frontend will re-fetch at most one page.
         await supabase.from("jobs").update({
           status:              "running",
           downloaded_comments: totalSoFar,
@@ -377,7 +347,7 @@ serve(async (req) => {
         return json({
           success:       true,
           done:          false,
-          nextPageToken: startPageToken ?? null, // best approximation — frontend will re-call
+          nextPageToken: startPageToken ?? null,
           job_id:        job.id,
           video_title:   video.title,
           channel_name:  video.channelName,
