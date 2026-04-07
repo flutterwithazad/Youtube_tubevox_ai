@@ -30,19 +30,19 @@ export class InnerTube {
     // YouTube sometimes uses escaped quotes (\u0022) in their script tags
     const cleanHtml = html.replace(/\\u0022/g, '"');
 
-    // NEW (Browser-Verified): Look specifically for the 'comment-item-section' block
-    // This is the only way to avoid grabbing ad or sidebar continuation tokens.
-    const commentSectionMatch = cleanHtml.match(/"sectionIdentifier":"comment-item-section"[^]*?"token":"([a-zA-Z0-9_-]{80,})"/);
-    
-    if (commentSectionMatch) {
-      return commentSectionMatch[1];
-    }
+    // PATTERN 1: The most direct path for 'comment-item-section'
+    const p1 = cleanHtml.match(/"sectionIdentifier":"comment-item-section"[^]*?"token":"([a-zA-Z0-9_-]{80,})"/);
+    if (p1) return p1[1];
 
-    // Fallback: look for ANY extremely long token (comment tokens are typically the longest on the page)
-    const fallback = cleanHtml.match(/"token":"([a-zA-Z0-9_-]{100,})"/);
-    if (fallback) return fallback[1];
+    // PATTERN 2: The standard continuation item renderer
+    const p2 = cleanHtml.match(/"continuationItemRenderer":\{"continuationEndpoint":\{"continuationCommand":\{"token":"([a-zA-Z0-9_-]{80,})"/);
+    if (p2) return p2[1];
+
+    // PATTERN 3: Fuzzy search for any long token following 'continuation'
+    const p3 = cleanHtml.match(/"continuation":"([a-zA-Z0-9_-]{100,})"/);
+    if (p3) return p3[1];
     
-    console.log("[INNER-TUBE] Could not find any continuation token in HTML");
+    console.log("[INNER-TUBE] Could not find any continuation token in HTML after trying 3 patterns");
     return null;
   }
 
@@ -57,24 +57,34 @@ export class InnerTube {
     const token = continuation || await this.getInitialToken();
     if (!token) return { comments: [], nextToken: null };
 
+    // PROFESSIONAL HEADERS TO AVOID BLOCKING:
+    const HEADERS = {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+      "X-Youtube-Client-Name": "1",
+      "X-Youtube-Client-Version": "2.20240320.01.00",
+      "Origin": "https://www.youtube.com",
+      "Referer": `https://www.youtube.com/watch?v=${this.videoId}`,
+    };
+
     const payload = {
       context: {
         client: {
+          hl: "en",
+          gl: "US",
           clientName: "WEB",
           clientVersion: "2.20240320.01.00",
           visitorData: this.visitorData,
+          originalUrl: `https://www.youtube.com/watch?v=${this.videoId}`,
         },
       },
-      continuation: continuation,
+      continuation: token,
     };
 
     const res = await fetch(url, {
       method: "POST",
       body: JSON.stringify(payload),
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      },
+      headers: HEADERS,
     });
 
     const data = await res.json();
