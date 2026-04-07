@@ -111,6 +111,9 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
     authorSearch:   "",
     commentWith:    [] as string[],
     minLikes:       0,
+    onlyHearted:    false,
+    onlyPinned:     false,
+    onlyPaid:       false,
   });
 
   // Advanced filter state
@@ -197,6 +200,9 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
     if (simpleFilters.commentWith.includes("hashtags"))  result = result.filter(c => c.text?.includes("#"));
     if (simpleFilters.commentWith.includes("emojis"))    result = result.filter(c => /\p{Emoji}/u.test(c.text ?? ""));
     if (simpleFilters.minLikes > 0)    result = result.filter(c => (c.likes ?? 0) >= simpleFilters.minLikes);
+    if (simpleFilters.onlyHearted)     result = result.filter(c => !!c.heart);
+    if (simpleFilters.onlyPinned)      result = result.filter(c => !!c.is_pinned);
+    if (simpleFilters.onlyPaid)        result = result.filter(c => !!c.is_paid);
 
     // 3. Advanced rules
     if (advancedRules.length > 0) result = result.filter(applyAdvancedRules);
@@ -225,6 +231,9 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
     if (simpleFilters.authorSearch)    count++;
     count += simpleFilters.commentWith.length;
     if (simpleFilters.minLikes > 0)    count++;
+    if (simpleFilters.onlyHearted)     count++;
+    if (simpleFilters.onlyPinned)      count++;
+    if (simpleFilters.onlyPaid)        count++;
     count += advancedRules.length;
     return count;
   }, [simpleFilters, advancedRules]);
@@ -343,7 +352,7 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
   const removeRule = (id: string) =>
     setAdvancedRules(prev => prev.filter(r => r.id !== id));
 
-  const clearSimple = () => setSimpleFilters({ includeReplies: true, authorSearch: "", commentWith: [], minLikes: 0 });
+  const clearSimple = () => setSimpleFilters({ includeReplies: true, authorSearch: "", commentWith: [], minLikes: 0, onlyHearted: false, onlyPinned: false, onlyPaid: false });
   const clearAll    = () => { clearSimple(); setAdvancedRules([]); };
 
   // ── Button styles ────────────────────────────────────────────────────────
@@ -502,6 +511,36 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
                     <div className="flex justify-between text-[10px] text-muted-foreground/60 mt-0.5">
                       <span>0</span>
                       <span>{(maxLikes || 100).toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Comment type</label>
+                    <div className="flex flex-col gap-2 mt-2">
+                      {[
+                        { key: "onlyHearted", emoji: "❤️", label: "Only Hearted" },
+                        { key: "onlyPinned",  emoji: "📌", label: "Only Pinned"  },
+                        { key: "onlyPaid",    emoji: "💰", label: "Only Paid"    },
+                      ].map(({ key, emoji, label }) => {
+                        const active = simpleFilters[key as "onlyHearted" | "onlyPinned" | "onlyPaid"];
+                        return (
+                          <label
+                            key={key}
+                            className={`flex items-center justify-between p-2.5 rounded-lg border-2 cursor-pointer transition-all ${active ? "border-primary bg-primary/5" : "border-border bg-secondary/30 hover:border-border/80"}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span>{emoji}</span>
+                              <span className={`text-xs font-semibold ${active ? "text-primary" : "text-muted-foreground"}`}>{label}</span>
+                            </div>
+                            <div
+                              onClick={() => setSimpleFilters(p => ({ ...p, [key]: !p[key as "onlyHearted" | "onlyPinned" | "onlyPaid"] }))}
+                              className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${active ? "bg-primary" : "bg-border"}`}
+                            >
+                              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${active ? "translate-x-4" : ""}`} />
+                            </div>
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
 

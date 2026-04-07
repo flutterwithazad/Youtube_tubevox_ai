@@ -3,7 +3,7 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { extractVideoId, getVideoType } from "@/lib/utils/youtube";
 import { fetchVideoPreview, VideoPreview } from "@/lib/utils/youtubeOembed";
 import { toast } from "sonner";
-import { Settings, Loader2, StopCircle, CheckCircle2 } from "lucide-react";
+import { Loader2, StopCircle, CheckCircle2 } from "lucide-react";
 import { CommentExplorer } from "@/components/dashboard/CommentExplorer";
 import { useAuth } from "@/hooks/use-auth";
 import { useCredits } from "@/hooks/use-credits";
@@ -57,9 +57,6 @@ export default function Scrape() {
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(null);
   const [liveCommentCount, setLiveCommentCount] = useState(0);
   const [liveCreditsUsed, setLiveCreditsUsed] = useState(0);
-  const [onlyHearted, setOnlyHearted] = useState(false);
-  const [onlyPinned, setOnlyPinned] = useState(false);
-  const [onlyPaid, setOnlyPaid] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isPartialResult, setIsPartialResult] = useState(false);
   const abortRef = useRef(false);
@@ -555,11 +552,7 @@ export default function Scrape() {
         const body: Record<string, unknown> = {
           videoUrl: effectiveVideoUrl,
           maxComments: finalMaxComments,
-          filters: {
-            onlyHearted,
-            onlyPinned,
-            onlyPaid,
-          },
+          filters: {},
         };
         if (jobId) body.jobId = jobId;
         if (pageToken) body.pageToken = pageToken;
@@ -1077,55 +1070,6 @@ export default function Scrape() {
                       )}
                     </div>
 
-                    <div className="pt-4 border-t border-gray-100 space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Settings className="w-4 h-4 text-gray-500" />
-                          <h4 className="text-sm font-semibold text-gray-900">Advanced Filters</h4>
-                        </div>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <label className={`flex items-center justify-between p-3 rounded-xl border-2 cursor-pointer transition-all ${onlyHearted ? 'border-red-500 bg-red-50' : 'border-gray-100 bg-gray-50/50 hover:border-gray-200'}`}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">❤️</span>
-                            <span className={`text-xs font-semibold ${onlyHearted ? 'text-red-700' : 'text-gray-600'}`}>Only Hearted</span>
-                          </div>
-                          <input 
-                            type="checkbox" 
-                            className="w-4 h-4 accent-red-600" 
-                            checked={onlyHearted}
-                            onChange={() => setOnlyHearted(!onlyHearted)}
-                          />
-                        </label>
-
-                        <label className={`flex items-center justify-between p-3 rounded-xl border-2 cursor-pointer transition-all ${onlyPinned ? 'border-red-500 bg-red-50' : 'border-gray-100 bg-gray-50/50 hover:border-gray-200'}`}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">📌</span>
-                            <span className={`text-xs font-semibold ${onlyPinned ? 'text-red-700' : 'text-gray-600'}`}>Only Pinned</span>
-                          </div>
-                          <input 
-                            type="checkbox" 
-                            className="w-4 h-4 accent-red-600" 
-                            checked={onlyPinned}
-                            onChange={() => setOnlyPinned(!onlyPinned)}
-                          />
-                        </label>
-
-                        <label className={`flex items-center justify-between p-3 rounded-xl border-2 cursor-pointer transition-all ${onlyPaid ? 'border-red-500 bg-red-50' : 'border-gray-100 bg-gray-50/50 hover:border-gray-200'}`}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">💰</span>
-                            <span className={`text-xs font-semibold ${onlyPaid ? 'text-red-700' : 'text-gray-600'}`}>Only Paid</span>
-                          </div>
-                          <input 
-                            type="checkbox" 
-                            className="w-4 h-4 accent-red-600" 
-                            checked={onlyPaid}
-                            onChange={() => setOnlyPaid(!onlyPaid)}
-                          />
-                        </label>
-                      </div>
-                    </div>
                   </div>
                 )}
 
