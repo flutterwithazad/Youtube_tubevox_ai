@@ -17,6 +17,9 @@ export interface FetchFilters {
   keyword?:        string;
   includeReplies?: boolean;
   maxComments?:    number;
+  onlyHearted?:    boolean;
+  onlyPinned?:     boolean;
+  onlyPaid?:       boolean;
 }
 
 export interface Comment {

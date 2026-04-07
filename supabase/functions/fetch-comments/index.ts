@@ -319,6 +319,9 @@ serve(async (req) => {
         // Apply filters (minLikes, etc.)
         const filtered = comments.map(c => ({ ...c, job_id: job.id })).filter(c => {
           if (filters.minLikes && (c.likes ?? 0) < filters.minLikes) return false;
+          if (filters.onlyHearted && !c.heart) return false;
+          if (filters.onlyPinned && !c.is_pinned) return false;
+          if (filters.onlyPaid && !c.is_paid) return false;
           if (filters.keyword) {
              const kws = filters.keyword.split(",").map(k => k.trim().toLowerCase());
              if (!kws.some(k => c.text.toLowerCase().includes(k))) return false;
