@@ -27,13 +27,18 @@ export class InnerTube {
     });
     const html = await res.text();
     
+    // YouTube sometimes uses escaped quotes (\u0022) in their script tags
+    const cleanHtml = html.replace(/\\u0022/g, '"');
+
     // Look for the continuation token specifically in the 'itemSection' which holds comments
-    // YouTube embeds this in a large JSON object called 'ytInitialData'
-    const m = html.match(/"itemSectionRenderer":\{"contents":\[\{"continuationItemRenderer":\{"continuationEndpoint":\{"continuationCommand":\{"token":"([a-zA-Z0-9_-]+)"/);
+    const m = cleanHtml.match(/"itemSectionRenderer":\{"contents":\[\{"continuationItemRenderer":\{"continuationEndpoint":\{"continuationCommand":\{"token":"([a-zA-Z0-9_-]+)"/);
     if (!m) {
-      // Fallback: look for ANY token that looks like a comments token
-      const fallback = html.match(/"continuation":"([a-zA-Z0-9_-]{50,})"/); // Comments tokens are usually very long
-      return fallback ? fallback[1] : null;
+      // Fallback: look for ANY long token that starts with 'continuation'
+      const fallback = cleanHtml.match(/"continuation":"([a-zA-Z0-9_-]{80,})"/); // Comments tokens are typically 100+ chars
+      if (fallback) return fallback[1];
+      
+      console.log("[INNER-TUBE] Could not find any continuation token in HTML");
+      return null;
     }
     return m[1];
   }
