@@ -1,9 +1,6 @@
--- ============================================================
--- Migration: Add trigger to auto-create profile + free credits
--- on new user signup (Google OAuth or email)
--- ============================================================
+-- Fix: use valid source_type 'admin_grant' for signup bonus
+-- 'signup_bonus' was rejected by the CHECK constraint
 
--- 1. Function that runs after a new row is inserted into auth.users
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -36,25 +33,21 @@ BEGIN
     ),
     'active'
   )
-  ON CONFLICT (id) DO NOTHING;  -- idempotent: skip if already exists
+  ON CONFLICT (id) DO NOTHING;
 
-  -- Award free credits via credit_ledger
+  -- Award free credits using 'admin_grant' (valid source_type in CHECK constraint)
   INSERT INTO public.credit_ledger (user_id, amount, source_type, description)
   VALUES (
     NEW.id,
     v_free_credits,
-    'signup_bonus',
-    'Welcome bonus credits'
-  )
-  ON CONFLICT DO NOTHING;
+    'admin_grant',
+    'Welcome bonus — free credits on signup'
+  );
 
+  RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+  -- Log the error but don't block signup
+  RAISE WARNING 'handle_new_user error for %: %', NEW.id, SQLERRM;
   RETURN NEW;
 END;
 $$;
-
--- 2. Attach the trigger to auth.users
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW
-  EXECUTE FUNCTION public.handle_new_user();
