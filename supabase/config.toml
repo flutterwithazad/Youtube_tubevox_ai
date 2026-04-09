@@ -26,8 +26,8 @@ file_size_limit = "50MiB"
 
 [auth]
 enabled = true
-site_url = "http://localhost:3000"
-additional_redirect_urls = []
+site_url = "https://tubevox.com/dashboard"
+additional_redirect_urls = ["https://tubevox.com/dashboard/auth/callback", "https://www.tubevox.com/dashboard/auth/callback", "http://173.249.9.155/dashboard/auth/callback", "http://localhost:3000/dashboard/auth/callback"]
 jwt_expiry = 3600
 enable_signup = true
 
