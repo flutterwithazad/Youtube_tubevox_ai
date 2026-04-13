@@ -26,6 +26,20 @@ interface ActiveJob {
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
+// -- LOCAL CANCELLATION TRACKING (prevents server overwrites) --
+const getCancelledJobs = (): string[] => {
+  try {
+    return JSON.parse(sessionStorage.getItem("cancelled_job_ids") || "[]");
+  } catch { return []; }
+};
+const markAsCancelledLocally = (jobId: string) => {
+  const ids = getCancelledJobs();
+  if (!ids.includes(jobId)) {
+    sessionStorage.setItem("cancelled_job_ids", JSON.stringify([...ids, jobId]));
+  }
+};
+const isCancelledLocally = (jobId: string) => getCancelledJobs().includes(jobId);
+
 export default function Scrape() {
   const { user } = useAuth();
   const { balance, refetch: refetchBalance } = useCredits(user?.id);
@@ -94,6 +108,14 @@ export default function Scrape() {
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      if (data && isCancelledLocally(data.id)) {
+        // This job was cancelled in this session but server set it back to running.
+        // Force it back to cancelled and move on.
+        await supabase.from("jobs").update({ status: "cancelled", completed_at: new Date().toISOString() }).eq("id", data.id);
+        checkActive(); // re-check for other potential jobs
+        return;
+      }
 
       if (!data) {
         // No active job — check for a recently completed/cancelled job (last 2 hours)
@@ -297,6 +319,12 @@ export default function Scrape() {
         .single();
 
       if (!job) return;
+
+      // Force status back to cancelled if the server overwrote it
+      if (job.status === "running" && isCancelledLocally(job.id)) {
+        supabase.from("jobs").update({ status: "cancelled", completed_at: new Date().toISOString() }).eq("id", job.id).then(() => {});
+        return;
+      }
 
       // Always advance the counter to the latest value
       const count = job.downloaded_comments ?? 0;
@@ -756,6 +784,7 @@ export default function Scrape() {
 
     // 3. Perform backend cancellation in background (don't block UI transition)
     if (idToCancel) {
+      markAsCancelledLocally(idToCancel);
       try {
         await supabase
           .from("jobs")

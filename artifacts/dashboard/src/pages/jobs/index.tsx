@@ -26,6 +26,20 @@ interface Stats {
   totalComments: number;
 }
 
+// -- LOCAL CANCELLATION TRACKING (prevents server overwrites) --
+const getCancelledJobs = (): string[] => {
+  try {
+    return JSON.parse(sessionStorage.getItem("cancelled_job_ids") || "[]");
+  } catch { return []; }
+};
+const markAsCancelledLocally = (jobId: string) => {
+  const ids = getCancelledJobs();
+  if (!ids.includes(jobId)) {
+    sessionStorage.setItem("cancelled_job_ids", JSON.stringify([...ids, jobId]));
+  }
+};
+const isCancelledLocally = (jobId: string) => getCancelledJobs().includes(jobId);
+
 export default function JobsList() {
   const [, setLocation] = useLocation();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -48,7 +62,22 @@ export default function JobsList() {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(50);
-    setJobs(data ?? []);
+    
+    const rawJobs = data ?? [];
+    const processedJobs = rawJobs.map(job => {
+      if (job.status === "running" && isCancelledLocally(job.id)) {
+        return { ...job, status: "cancelled" };
+      }
+      return job;
+    });
+    setJobs(processedJobs);
+
+    // If any jobs were found running but should be cancelled, trigger a background fix
+    rawJobs.forEach(job => {
+      if (job.status === "running" && isCancelledLocally(job.id)) {
+        supabase.from("jobs").update({ status: "cancelled", completed_at: new Date().toISOString() }).eq("id", job.id).then(() => {});
+      }
+    });
   };
 
   const fetchStats = async () => {
@@ -77,6 +106,9 @@ export default function JobsList() {
   };
 
   const handleCancel = async (jobId: string) => {
+    markAsCancelledLocally(jobId);
+    // Optimistic UI update
+    setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: "cancelled" } : j));
     await supabase.from("jobs").update({ status: "cancelled", completed_at: new Date().toISOString() }).eq("id", jobId);
     fetchJobs();
   };
