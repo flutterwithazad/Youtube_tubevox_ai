@@ -1,6 +1,6 @@
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Link, useLocation } from "wouter";
-import { Plus, FileText, Activity, Zap, AlertCircle, Clock, Play, RefreshCw } from "lucide-react";
+import { Plus, FileText, Activity, AlertCircle, Clock, Play, RefreshCw } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
@@ -24,13 +24,12 @@ interface Job {
 interface Stats {
   totalJobs: number;
   totalComments: number;
-  creditsSpent: number;
 }
 
 export default function JobsList() {
   const [, setLocation] = useLocation();
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [stats, setStats] = useState<Stats>({ totalJobs: 0, totalComments: 0, creditsSpent: 0 });
+  const [stats, setStats] = useState<Stats>({ totalJobs: 0, totalComments: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -125,11 +124,10 @@ export default function JobsList() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
         {[
           { icon: Activity, label: "Total Jobs", value: loading ? null : stats.totalJobs.toLocaleString() },
           { icon: FileText, label: "Comments Scraped", value: loading ? null : stats.totalComments.toLocaleString(), className: "text-success" },
-          { icon: Zap, label: "Credits Spent", value: loading ? null : stats.creditsSpent.toLocaleString(), className: "text-primary font-mono" },
         ].map((card) => (
           <div key={card.label} className="bg-card border border-border rounded-xl p-5 shadow-sm">
             <div className="flex items-center gap-3 text-muted-foreground mb-2">
