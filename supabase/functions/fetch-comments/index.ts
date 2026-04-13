@@ -209,7 +209,14 @@ serve(async (req) => {
     if (!startPageToken) {
       runningUpdate.started_at = new Date().toISOString();
     }
-    await supabase.from("jobs").update(runningUpdate).eq("id", job.id);
+
+    // Check for cancellation before marking as running
+    const { data: preStartCheck } = await supabase.from("jobs").select("status").eq("id", job.id).maybeSingle();
+    if (preStartCheck?.status === "cancelled") {
+      return json({ success: true, cancelled: true, job_id: job.id, comment_count: alreadyFetched });
+    }
+
+    await supabase.from("jobs").update(runningUpdate).eq("id", job.id).neq("status", "cancelled");
 
     let totalInserted  = 0;  // count for THIS invocation only
     let creditsUsed    = 0;
@@ -422,14 +429,14 @@ serve(async (req) => {
           downloaded_comments: totalAcrossAllInvocations,
           completed_at:        new Date().toISOString(),
           filters:             { ...(job.filters ?? {}), _resume_token: null, _locked_at: null },
-        }).eq("id", job.id);
+        }).eq("id", job.id).neq("status", "cancelled");
       } else {
         // More pages remain — save resume token and release lock so the next
-        // invocation can claim it immediately (no 120s wait needed).
+        // invocation can chain another invocation without losing progress.
         await supabase.from("jobs").update({
           downloaded_comments: totalAcrossAllInvocations,
           filters:             { ...(job.filters ?? {}), _resume_token: nextPageToken, _locked_at: null },
-        }).eq("id", job.id);
+        }).eq("id", job.id).neq("status", "cancelled");
       }
     } else {
       await supabase.from("jobs").update({
