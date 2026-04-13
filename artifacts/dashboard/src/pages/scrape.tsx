@@ -570,6 +570,19 @@ export default function Scrape() {
           });
           result = await response.json();
 
+          if (abortRef.current) {
+            // User cancelled while fetch was pending.
+            const cancelId = result?.job_id || jobId;
+            if (cancelId) {
+              supabase
+                .from("jobs")
+                .update({ status: "cancelled", completed_at: new Date().toISOString() })
+                .eq("id", cancelId)
+                .then(() => {}); // fire and forget
+            }
+            return;
+          }
+
           if (!response.ok || result.error) {
             if (result.error === "concurrent_invocation") {
               // The edge function lock is held by another invocation.
@@ -718,20 +731,18 @@ export default function Scrape() {
   };
 
   const handleCancel = async () => {
+    // 1. Immediately signal abortion to the loop and stop UI running state
     abortRef.current = true;
-    if (activeJobId) {
-      await supabase
-        .from("jobs")
-        .update({ status: "cancelled", completed_at: new Date().toISOString() })
-        .eq("id", activeJobId);
-    }
     setIsRunning(false);
+    
+    // Capture current ID locally before we potentially null it out
+    const idToCancel = activeJobId;
 
-    if (liveCommentCount >= 100 && activeJobId) {
-      // Enough partial data — keep the explorer open
-      setActiveJob((prev) => prev ? { ...prev, status: "cancelled" } : prev);
+    // 2. Decide UI destination (Results explorer if enough data, or Input screen)
+    if (liveCommentCount >= 100 && idToCancel) {
       setIsPartialResult(true);
       setState("completed");
+      setActiveJob((prev) => prev ? { ...prev, status: "cancelled" } : prev);
       toast.warning(
         `Job cancelled at ${liveCommentCount.toLocaleString()} comments. Showing available data.`,
         { duration: 6000 }
@@ -741,6 +752,18 @@ export default function Scrape() {
       setActiveJobId(null);
       setActiveJob(null);
       toast.info("Job cancelled.");
+    }
+
+    // 3. Perform backend cancellation in background (don't block UI transition)
+    if (idToCancel) {
+      try {
+        await supabase
+          .from("jobs")
+          .update({ status: "cancelled", completed_at: new Date().toISOString() })
+          .eq("id", idToCancel);
+      } catch (err) {
+        console.error("Failed to cancel job in DB:", err);
+      }
     }
   };
 
