@@ -12,6 +12,8 @@ import RefundsPage from "@/pages/RefundsPage";
 import CookiesPage from "@/pages/CookiesPage";
 import BlogPage from "@/pages/BlogPage";
 import StatusPage from "@/pages/StatusPage";
+import { Navbar } from "@/components/landing/Navbar";
+import { Footer } from "@/components/landing/Footer";
 
 const queryClient = new QueryClient();
 
@@ -22,24 +24,30 @@ function Redirect({ to }: { to: string }) {
 
 function Router() {
   return (
-    <Switch>
-      <Route path="/" component={Landing} />
-      <Route path="/about" component={AboutPage} />
-      <Route path="/contact" component={ContactPage} />
-      <Route path="/privacy" component={PrivacyPage} />
-      <Route path="/terms" component={TermsPage} />
-      <Route path="/refunds" component={RefundsPage} />
-      <Route path="/cookies" component={CookiesPage} />
-      <Route path="/blog" component={BlogPage} />
-      <Route path="/status" component={StatusPage} />
-      <Route path="/login">
-        <Redirect to="/dashboard/login" />
-      </Route>
-      <Route path="/signup">
-        <Redirect to="/dashboard/signup" />
-      </Route>
-      <Route component={NotFound} />
-    </Switch>
+    <div className="min-h-screen flex flex-col">
+      <Navbar />
+      <main className="flex-1">
+        <Switch>
+          <Route path="/" component={Landing} />
+          <Route path="/about" component={AboutPage} />
+          <Route path="/contact" component={ContactPage} />
+          <Route path="/privacy" component={PrivacyPage} />
+          <Route path="/terms" component={TermsPage} />
+          <Route path="/refunds" component={RefundsPage} />
+          <Route path="/cookies" component={CookiesPage} />
+          <Route path="/blog" component={BlogPage} />
+          <Route path="/status" component={StatusPage} />
+          <Route path="/login">
+            <Redirect to="/dashboard/login" />
+          </Route>
+          <Route path="/signup">
+            <Redirect to="/dashboard/signup" />
+          </Route>
+          <Route component={NotFound} />
+        </Switch>
+      </main>
+      <Footer />
+    </div>
   );
 }
 

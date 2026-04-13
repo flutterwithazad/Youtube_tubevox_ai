@@ -21,7 +21,7 @@ export default function StatusPage() {
             System Status
           </h1>
           <p className="text-gray-500 mt-3 text-sm">
-            Real-time status of all YTScraper services.
+            Real-time status of all TubeVox services.
           </p>
         </div>
 

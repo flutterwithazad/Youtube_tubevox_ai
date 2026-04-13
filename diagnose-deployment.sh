@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║         YTScraper VPS Deployment Diagnostic Report            ║${NC}"
+echo -e "${BLUE}║         TubeVox VPS Deployment Diagnostic Report            ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Generated: $(date)"
@@ -61,7 +61,7 @@ if [ -d "$PROJECT_ROOT" ]; then
     [ -d "$PROJECT_ROOT/artifacts/api-server/dist" ] && echo -e "${GREEN}✓${NC} API server built" || echo -e "${RED}✗${NC} API server NOT built"
     [ -d "$PROJECT_ROOT/artifacts/dashboard/dist" ] && echo -e "${GREEN}✓${NC} Dashboard built" || echo -e "${RED}✗${NC} Dashboard NOT built"
     [ -d "$PROJECT_ROOT/artifacts/admin/dist" ] && echo -e "${GREEN}✓${NC} Admin panel built" || echo -e "${RED}✗${NC} Admin panel NOT built"
-    [ -d "$PROJECT_ROOT/artifacts/ytscraper-landing/dist" ] && echo -e "${GREEN}✓${NC} Landing page built" || echo -e "${RED}✗${NC} Landing page NOT built"
+    [ -d "$PROJECT_ROOT/artifacts/tubevox-landing/dist" ] && echo -e "${GREEN}✓${NC} Landing page built" || echo -e "${RED}✗${NC} Landing page NOT built"
     echo ""
 else
     echo -e "${RED}✗${NC} Project directory NOT found!"

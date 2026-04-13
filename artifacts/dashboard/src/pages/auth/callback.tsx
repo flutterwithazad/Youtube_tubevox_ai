@@ -48,7 +48,7 @@ export default function AuthCallback() {
             duration: 6000,
           });
         } catch {
-          toast.success("Welcome to YTScraper!", { duration: 4000 });
+          toast.success("Welcome to TubeVox!", { duration: 4000 });
         }
         localStorage.setItem("yt_welcome_shown", "1");
       }

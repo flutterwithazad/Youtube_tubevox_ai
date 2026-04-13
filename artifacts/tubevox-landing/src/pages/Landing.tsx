@@ -1,4 +1,3 @@
-import { Navbar } from '@/components/landing/Navbar';
 import { Hero } from '@/components/landing/Hero';
 import { SocialProof } from '@/components/landing/SocialProof';
 import { Features } from '@/components/landing/Features';
@@ -8,7 +7,6 @@ import { HowItWorks } from '@/components/landing/HowItWorks';
 import { Testimonials } from '@/components/landing/Testimonials';
 import { FAQ } from '@/components/landing/FAQ';
 import { Pricing } from '@/components/landing/Pricing';
-import { Footer } from '@/components/landing/Footer';
 import { Reveal } from '@/components/landing/Reveal';
 import { usePlatformData } from '@/hooks/usePlatformData';
 
@@ -53,23 +51,17 @@ export default function Landing() {
   const { freeCredits, packages, loading } = usePlatformData();
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
-      
-      <main>
-        <Hero freeCredits={freeCredits} loading={loading} />
-        <SocialProof />
-        <Features />
-        <UseCases />
-        <DatasetPreview />
-        <HowItWorks />
-        <Testimonials />
-        <FAQ freeCredits={freeCredits} />
-        <Pricing freeCredits={freeCredits} packages={packages} loading={loading} />
-        <FinalCTA freeCredits={freeCredits} loading={loading} />
-      </main>
-
-      <Footer />
+    <div className="bg-background">
+      <Hero freeCredits={freeCredits} loading={loading} />
+      <SocialProof />
+      <Features />
+      <UseCases />
+      <DatasetPreview />
+      <HowItWorks />
+      <Testimonials />
+      <FAQ freeCredits={freeCredits} />
+      <Pricing freeCredits={freeCredits} packages={packages} loading={loading} />
+      <FinalCTA freeCredits={freeCredits} loading={loading} />
     </div>
   );
 }

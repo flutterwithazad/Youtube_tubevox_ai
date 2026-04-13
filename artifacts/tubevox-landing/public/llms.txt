@@ -1,10 +1,10 @@
-# YTScraper
+# TubeVox
 
-> YTScraper is a web-based SaaS tool that lets researchers, marketers, and developers scrape and export YouTube comments at scale.
+> TubeVox is a web-based SaaS tool that lets researchers, marketers, and developers scrape and export YouTube comments at scale.
 
 ## What it does
 
-YTScraper extracts comments from any YouTube video or channel and exports them to CSV, JSON, or Google Sheets. Users can filter comments by keywords, sentiment, pinned status, and creator hearts. The tool uses a credit-based pricing model with 1,000 free credits on signup — no credit card required.
+TubeVox extracts comments from any YouTube video or channel and exports them to CSV, JSON, or Google Sheets. Users can filter comments by keywords, sentiment, pinned status, and creator hearts. The tool uses a credit-based pricing model with 1,000 free credits on signup — no credit card required.
 
 ## Key features
 
@@ -32,6 +32,6 @@ YTScraper extracts comments from any YouTube video or channel and exports them t
 
 ## Social
 
-- Twitter/X: https://twitter.com/ytscraper
-- LinkedIn: https://linkedin.com/company/ytscraper
+- Twitter/X: https://twitter.com/tubevox
+- LinkedIn: https://linkedin.com/company/tubevox
 - YouTube: https://youtube.com/channel/UC1mipgTfQUB03ggCqkb8ckA

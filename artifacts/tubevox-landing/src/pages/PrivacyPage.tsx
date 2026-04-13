@@ -16,7 +16,7 @@ export default function PrivacyPage() {
         <div className="space-y-10 text-gray-600 text-sm leading-relaxed">
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">1. Information we collect</h2>
-            <p>When you create an account, we collect your name and email address. When you use YTScraper, we collect information about the YouTube videos you scrape (video URLs, comment data) and your usage patterns.</p>
+            <p>When you create an account, we collect your name and email address. When you use TubeVox, we collect information about the YouTube videos you scrape (video URLs, comment data) and your usage patterns.</p>
             <p className="mt-3">We do not sell your personal information to third parties.</p>
           </section>
 

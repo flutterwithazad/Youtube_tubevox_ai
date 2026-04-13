@@ -1,8 +1,8 @@
-# 🔐 Google OAuth Setup Guide for YTScraper
+# 🔐 Google OAuth Setup Guide for TubeVox
 
 ## Status: Deployment Complete ✅
 
-Your YTScraper application is fully deployed and running on your VPS. All services are online:
+Your TubeVox application is fully deployed and running on your VPS. All services are online:
 - ✅ Landing Page (port 3002)
 - ✅ Dashboard (port 3000)
 - ✅ Admin Panel (port 3001)
@@ -20,7 +20,7 @@ Your YTScraper application is fully deployed and running on your VPS. All servic
 1. Go to **Google Cloud Console**: https://console.cloud.google.com
 2. Create a new project:
    - Click **"Select a Project"** → **"New Project"**
-   - Name: `YTScraper` (or your app name)
+   - Name: `TubeVox` (or your app name)
    - Click **"Create"**
 3. Wait for the project to be created
 
@@ -32,7 +32,7 @@ Your YTScraper application is fully deployed and running on your VPS. All servic
 2. Select **User Type**: `External`
 3. Click **"Create"**
 4. Fill out the OAuth consent screen:
-   - **App name**: YTScraper
+   - **App name**: TubeVox
    - **User support email**: your-email@gmail.com
    - **Developer contact**: your-email@gmail.com
    - Click **"Save and Continue"**
@@ -55,7 +55,7 @@ Your YTScraper application is fully deployed and running on your VPS. All servic
 2. Click **"+ Create Credentials"** → **"OAuth client ID"**
 3. Select **"Web application"**
 4. Fill in:
-   - **Name**: `YTScraper Web Client`
+   - **Name**: `TubeVox Web Client`
    - **Authorized JavaScript origins**: Add these:
      ```
      http://localhost:3000

@@ -1,4 +1,4 @@
-# ⚡ Quick Reference - YTScraper Deployment
+# ⚡ Quick Reference - TubeVox Deployment
 
 ## 🌐 Live URLs
 

@@ -1,4 +1,4 @@
-# YTScraper — Local Development Setup
+# TubeVox — Local Development Setup
 
 A YouTube comment scraping SaaS built as a pnpm monorepo with React + Vite frontends, an Express API server, and Supabase for auth, database, and edge functions.
 
@@ -11,7 +11,7 @@ A YouTube comment scraping SaaS built as a pnpm monorepo with React + Vite front
 | API Server | `artifacts/api-server` | `8080` | Express backend — credits, admin, etc. |
 | Dashboard | `artifacts/dashboard` | `3000` | User-facing scraping app |
 | Admin Panel | `artifacts/admin` | `3001` | Admin management interface |
-| Landing Page | `artifacts/ytscraper-landing` | `3002` | Marketing page |
+| Landing Page | `artifacts/tubevox-landing` | `3002` | Marketing page |
 
 ---
 
@@ -30,7 +30,7 @@ Make sure these are installed on your machine before starting:
 
 ```bash
 git clone <your-repo-url>
-cd ytscraper
+cd tubevox
 ```
 
 ---
@@ -136,7 +136,7 @@ PORT=3001 BASE_PATH=/admin/ pnpm --filter @workspace/admin run dev
 
 **Terminal 4 — Landing Page (optional):**
 ```bash
-PORT=3002 pnpm --filter @workspace/ytscraper-landing run dev
+PORT=3002 pnpm --filter @workspace/tubevox-landing run dev
 ```
 
 Then open in your browser:
@@ -203,12 +203,12 @@ Run the deploy command from Step 5. Edge functions must be deployed separately �
 ## Project structure
 
 ```
-ytscraper/
+tubevox/
 ├── artifacts/
 │   ├── api-server/          # Express API — credits, admin auth, YouTube key management
 │   ├── dashboard/           # React + Vite — user-facing scraping UI
 │   ├── admin/               # React + Vite — admin panel
-│   └── ytscraper-landing/   # React + Vite — marketing landing page
+│   └── tubevox-landing/   # React + Vite — marketing landing page
 ├── supabase/
 │   ├── functions/
 │   │   └── fetch-comments/  # Deno edge function — YouTube scraping engine

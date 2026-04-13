@@ -17,7 +17,7 @@ export function MaintenanceScreen() {
         Under Maintenance
       </h1>
       <p className="text-muted-foreground max-w-sm text-sm leading-relaxed">
-        YTScraper is currently undergoing scheduled maintenance. We'll be back
+        TubeVox is currently undergoing scheduled maintenance. We'll be back
         online shortly. Thank you for your patience.
       </p>
     </div>

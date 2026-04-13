@@ -43,7 +43,7 @@ export default function CookiesPage() {
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">Managing cookies</h2>
-            <p>You can control cookies through your browser settings. Disabling essential cookies will prevent you from logging in to YTScraper.</p>
+            <p>You can control cookies through your browser settings. Disabling essential cookies will prevent you from logging in to TubeVox.</p>
           </section>
 
           <section>

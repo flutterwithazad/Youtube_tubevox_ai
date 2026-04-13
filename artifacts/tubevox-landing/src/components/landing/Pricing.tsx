@@ -153,7 +153,7 @@ export function Pricing({ freeCredits, packages, loading }: Props) {
         <Reveal className="text-center mt-10">
           <p className="text-sm text-muted-foreground">
             Need a bulk deal or enterprise volume?{' '}
-            <a href="mailto:hello@ytscraper.com" className="text-primary hover:underline font-medium">Contact us →</a>
+            <a href="mailto:hello@tubevox.com" className="text-primary hover:underline font-medium">Contact us →</a>
           </p>
         </Reveal>
       </div>

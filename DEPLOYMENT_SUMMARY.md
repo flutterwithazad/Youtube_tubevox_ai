@@ -1,8 +1,8 @@
-# 🚀 YTScraper VPS Deployment - Complete Summary
+# 🚀 TubeVox VPS Deployment - Complete Summary
 
 ## ✅ DEPLOYMENT STATUS: LIVE & OPERATIONAL
 
-Your YTScraper application is **fully deployed** on your VPS at **173.249.9.155**
+Your TubeVox application is **fully deployed** on your VPS at **173.249.9.155**
 
 ---
 
@@ -245,7 +245,7 @@ pm2 restart dashboard
 │   ├── api-server/dist/          # Built API server
 │   ├── dashboard/dist/           # Built dashboard
 │   ├── admin/dist/               # Built admin
-│   └── ytscraper-landing/dist/   # Built landing
+│   └── tubevox-landing/dist/   # Built landing
 └── supabase/                      # Database migrations
 ```
 
@@ -263,7 +263,7 @@ pm2 restart dashboard
 
 ## 🎉 Conclusion
 
-Your YTScraper deployment is **production-ready**! 
+Your TubeVox deployment is **production-ready**! 
 
 The only remaining task is to configure Google OAuth authentication. Follow the guide in `GOOGLE_OAUTH_SETUP.md` to complete the setup.
 

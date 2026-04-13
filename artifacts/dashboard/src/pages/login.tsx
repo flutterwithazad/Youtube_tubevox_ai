@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { Play, Eye, EyeOff, ShieldX } from "lucide-react";
+import { Play, Eye, EyeOff, ShieldX, Info } from "lucide-react";
+import { usePlatformSettings } from "@/hooks/use-platform-settings";
 
 export default function Login() {
   const [, setLocation] = useLocation();
@@ -20,6 +21,8 @@ export default function Login() {
     } catch {}
     return null;
   });
+  const { settings, isLoading } = usePlatformSettings();
+  const emailDisabled = settings?.email_signin_enabled === false;
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,7 +116,7 @@ export default function Login() {
             Welcome back
           </h1>
           <p className="mt-2 text-muted-foreground text-sm">
-            Sign in to your YTScraper account
+            Sign in to your TubeVox account
           </p>
         </div>
 
@@ -140,10 +143,10 @@ export default function Login() {
             <div className="flex items-center gap-2 bg-background/60 rounded-lg px-3 py-2 border border-border">
               <span className="text-xs text-muted-foreground">Need help?</span>
               <a
-                href="mailto:support@ytscraper.com"
+                href="mailto:support@tubevox.com"
                 className="text-xs font-semibold text-primary hover:underline"
               >
-                support@ytscraper.com
+                support@tubevox.com
               </a>
             </div>
           </div>
@@ -168,84 +171,108 @@ export default function Login() {
             {googleLoading ? "Redirecting…" : "Continue with Google"}
           </button>
 
-          <div className="my-6 flex items-center gap-3">
-            <div className="flex-1 h-px bg-border" />
-            <span className="text-xs text-muted-foreground font-medium">or</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-
-          <form className="space-y-4" onSubmit={handleEmailLogin}>
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">
-                Email address
-              </label>
-              <input
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                className="w-full px-4 py-3 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
-              />
+          {isLoading ? (
+            <div className="my-8 flex flex-col items-center justify-center gap-3 py-4">
+              <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+              <p className="text-xs text-muted-foreground animate-pulse">Checking configurations...</p>
             </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-sm font-medium text-foreground">
-                  Password
-                </label>
-                <button
-                  type="button"
-                  onClick={handleForgotPassword}
-                  className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-                >
-                  Forgot password?
-                </button>
-              </div>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  required
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full px-4 py-3 pr-11 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={emailLoading || googleLoading}
-              className="w-full flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold text-white bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 transition-all duration-200"
-            >
-              {emailLoading ? (
+          ) : (
+            <>
+              {!emailDisabled && (
                 <>
-                  <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  Signing in…
+                  <div className="my-6 flex items-center gap-3">
+                    <div className="flex-1 h-px bg-border" />
+                    <span className="text-xs text-muted-foreground font-medium">or</span>
+                    <div className="flex-1 h-px bg-border" />
+                  </div>
+
+                  <form className="space-y-4" onSubmit={handleEmailLogin}>
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1.5">
+                        Email address
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="you@company.com"
+                        className="w-full px-4 py-3 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-sm font-medium text-foreground">
+                          Password
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleForgotPassword}
+                          className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                        >
+                          Forgot password?
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? "text" : "password"}
+                          required
+                          autoComplete="current-password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-4 py-3 pr-11 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={emailLoading || googleLoading}
+                      className="w-full flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold text-white bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 transition-all duration-200"
+                    >
+                      {emailLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                          Signing in…
+                        </>
+                      ) : (
+                        "Sign in"
+                      )}
+                    </button>
+                  </form>
                 </>
-              ) : (
-                "Sign in"
               )}
-            </button>
-          </form>
+
+              {emailDisabled && (
+                <div className="mt-6 flex items-start gap-2.5 p-3 rounded-xl bg-secondary/50 border border-border">
+                  <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Direct email login is currently disabled by the administrator. Please use the Google option above.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
-        <p className="mt-6 text-center text-sm text-muted-foreground">
-          Don't have an account?{" "}
-          <Link href="/signup" className="font-semibold text-primary hover:text-primary/80 transition-colors">
-            Sign up for free
-          </Link>
-        </p>
+        {!isLoading && !emailDisabled && (
+          <p className="mt-6 text-center text-sm text-muted-foreground">
+            Don't have an account?{" "}
+            <Link href="/signup" className="font-semibold text-primary hover:text-primary/80 transition-colors">
+              Sign up for free
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

@@ -4,7 +4,7 @@ import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import { AlertTriangle } from 'lucide-react';
 
-const TOGGLE_KEYS = ['maintenance_mode', 'new_signups_enabled'];
+const TOGGLE_KEYS = ['maintenance_mode', 'new_signups_enabled', 'email_signin_enabled'];
 const NUMBER_KEYS  = ['max_job_comments', 'free_plan_credits', 'credit_cost_per_1000'];
 
 const FRIENDLY: Record<string, { label: string; description: string }> = {
@@ -15,6 +15,10 @@ const FRIENDLY: Record<string, { label: string; description: string }> = {
   new_signups_enabled: {
     label: 'New Signups Enabled',
     description: 'When OFF, the signup page shows a "Registration closed" message and blocks new accounts.',
+  },
+  email_signin_enabled: {
+    label: 'Email Sign-in Enabled',
+    description: 'When OFF, users will only see the "Sign in with Google" button. Email/Password login will be hidden.',
   },
   free_plan_credits: {
     label: 'Signup Bonus (free_plan_credits)',

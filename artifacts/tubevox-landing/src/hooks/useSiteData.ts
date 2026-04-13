@@ -26,12 +26,12 @@ export interface SiteData {
 }
 
 const DEFAULT_SETTINGS: SiteSettings = {
-  contact_email: 'support@ytscraper.com',
+  contact_email: 'support@tubevox.com',
   contact_phone: '',
   contact_address: '',
   contact_hours: 'Monday–Friday, 9am–6pm PST',
-  company_name: 'YTScraper Inc.',
-  company_email: 'legal@ytscraper.com',
+  company_name: 'TubeVox Inc.',
+  company_email: 'legal@tubevox.com',
 };
 
 export function useSiteData(): SiteData {

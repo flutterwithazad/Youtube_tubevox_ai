@@ -29,8 +29,8 @@ React + Vite full admin panel. Secured by bcrypt + JWT (httpOnly cookie `admin_t
 - **Env vars needed**: `ADMIN_JWT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
 - **Key files**: `artifacts/admin/src/App.tsx`, `artifacts/admin/src/lib/api.ts`, `artifacts/admin/src/lib/auth-context.tsx`, `artifacts/api-server/src/lib/admin-auth.ts`
 
-### `artifacts/ytscraper-landing` — Marketing Landing Page (at `/`)
-React + Vite landing page for YTScraper. All 12 sections: navbar, hero, social proof, features, use cases, dataset preview table, how it works, testimonials, FAQ accordion, pricing, final CTA, footer. Fonts: Syne (headings), DM Sans (body), JetBrains Mono (data). Pure static frontend — no backend or auth.
+### `artifacts/tubevox-landing` — Marketing Landing Page (at `/`)
+React + Vite landing page for TubeVox. All 12 sections: navbar, hero, social proof, features, use cases, dataset preview table, how it works, testimonials, FAQ accordion, pricing, final CTA, footer. Fonts: Syne (headings), DM Sans (body), JetBrains Mono (data). Pure static frontend — no backend or auth.
 
 ### `artifacts/dashboard` — User Panel Dashboard (at `/dashboard/`)
 React + Vite SaaS dashboard connected to Supabase (auth + database).
@@ -53,7 +53,7 @@ React + Vite SaaS dashboard connected to Supabase (auth + database).
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
 │   ├── api-server/         # Express API server
-│   ├── ytscraper-landing/  # Marketing landing page (/)
+│   ├── tubevox-landing/  # Marketing landing page (/)
 │   └── dashboard/          # User panel dashboard (/dashboard/)
 ├── lib/                    # Shared libraries
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config

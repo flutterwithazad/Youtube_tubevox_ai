@@ -36,7 +36,7 @@ export function Navbar() {
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
             <Play className="w-4 h-4 text-primary fill-primary" />
           </div>
-          <span className="font-display font-bold text-xl tracking-tight">YTScraper</span>
+          <span className="font-display font-bold text-xl tracking-tight">TubeVox</span>
         </Link>
 
         {/* Desktop Nav */}

@@ -1,4 +1,4 @@
--- YTScraper Database Migration
+-- TubeVox Database Migration
 -- Generated: 2026-04-06T06:59:37.810Z
 -- Project: jxceenqmcyclbxaxvxto
 
@@ -595,9 +595,9 @@ CREATE INDEX user_sessions_token_idx ON public.user_sessions USING btree (sessio
 
 -- Seed: platform_settings
 INSERT INTO platform_settings (key, value) VALUES
-  ('company_name', 'YTScraper'),
-  ('company_email', 'hello@ytscraper.com'),
-  ('contact_email', 'support@ytscraper.com'),
+  ('company_name', 'TubeVox'),
+  ('company_email', 'hello@tubevox.com'),
+  ('contact_email', 'support@tubevox.com'),
   ('contact_phone', ''),
   ('contact_address', ''),
   ('contact_hours', 'Mon–Fri 9am–6pm UTC'),

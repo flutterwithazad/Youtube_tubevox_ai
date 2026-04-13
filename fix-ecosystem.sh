@@ -61,7 +61,7 @@ module.exports = {
     {
       name: 'landing',
       script: 'npx',
-      args: 'serve -l 3002 -s artifacts/ytscraper-landing/dist',
+      args: 'serve -l 3002 -s artifacts/tubevox-landing/dist',
       cwd: '/var/www/Youtube_tubevox_ai',
       instances: 1,
       exec_mode: 'fork',

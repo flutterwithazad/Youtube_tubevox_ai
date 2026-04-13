@@ -12,7 +12,7 @@ export default function AboutPage() {
           Built for people who take<br />YouTube data seriously
         </h1>
         <p className="text-lg text-gray-500 max-w-2xl mx-auto leading-relaxed">
-          YTScraper was built by researchers and marketers frustrated with manual comment copying.
+          TubeVox was built by researchers and marketers frustrated with manual comment copying.
           We made the extraction fast, reliable, and export-ready — so you can focus on insights, not infrastructure.
         </p>
       </section>

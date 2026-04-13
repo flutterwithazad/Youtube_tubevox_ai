@@ -41,7 +41,7 @@ export function Footer() {
               <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
                 <Play className="w-4 h-4 text-white fill-white" />
               </div>
-              <span className="font-display font-bold text-xl tracking-tight">YTScraper</span>
+              <span className="font-display font-bold text-xl tracking-tight">TubeVox</span>
             </Link>
             <p className="text-white/60 mb-6 max-w-xs text-sm leading-relaxed">
               Turn YouTube comments into research-ready datasets. Export to CSV, Excel, or JSON in seconds.

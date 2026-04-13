@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { Play, Eye, EyeOff } from "lucide-react";
+import { Play, Eye, EyeOff, Info } from "lucide-react";
 import { usePlatformSettings } from "@/hooks/use-platform-settings";
 
 export default function Signup() {
@@ -13,7 +13,8 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailLoading, setEmailLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const { settings } = usePlatformSettings();
+  const { settings, isLoading } = usePlatformSettings();
+  const emailDisabled = settings?.email_signin_enabled === false;
 
   const signupsDisabled = settings !== null && !settings.new_signups_enabled;
 
@@ -41,7 +42,7 @@ export default function Signup() {
         const bonusAmount = Number(setting?.value ?? 500);
         toast.success(`🎉 Welcome! You've received ${bonusAmount.toLocaleString()} free credits to get started.`, { duration: 6000 });
       } catch {
-        toast.success("Account created! Welcome to YTScraper.", { duration: 4000 });
+        toast.success("Account created! Welcome to TubeVox.", { duration: 4000 });
       }
 
       localStorage.setItem("yt_welcome_shown", "1");
@@ -124,98 +125,122 @@ export default function Signup() {
             {googleLoading ? "Redirecting…" : "Sign up with Google"}
           </button>
 
-          <div className="my-6 flex items-center gap-3">
-            <div className="flex-1 h-px bg-border" />
-            <span className="text-xs text-muted-foreground font-medium">or</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-
-          <form className="space-y-4" onSubmit={handleEmailSignup}>
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">
-                Full name
-              </label>
-              <input
-                type="text"
-                required
-                autoComplete="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="John Doe"
-                className="w-full px-4 py-3 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
-              />
+          {isLoading ? (
+            <div className="my-8 flex flex-col items-center justify-center gap-3 py-4">
+              <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+              <p className="text-xs text-muted-foreground animate-pulse">Checking configurations...</p>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">
-                Email address
-              </label>
-              <input
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                className="w-full px-4 py-3 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  required
-                  autoComplete="new-password"
-                  minLength={6}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Min. 6 characters"
-                  className="w-full px-4 py-3 pr-11 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={emailLoading || googleLoading}
-              className="w-full flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold text-white bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 transition-all duration-200"
-            >
-              {emailLoading ? (
+          ) : (
+            <>
+              {!emailDisabled && (
                 <>
-                  <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  Creating account…
-                </>
-              ) : (
-                "Create account"
-              )}
-            </button>
-          </form>
+                  <div className="my-6 flex items-center gap-3">
+                    <div className="flex-1 h-px bg-border" />
+                    <span className="text-xs text-muted-foreground font-medium">or</span>
+                    <div className="flex-1 h-px bg-border" />
+                  </div>
 
-          <p className="mt-5 text-center text-xs text-muted-foreground leading-relaxed">
-            By signing up you agree to our{" "}
-            <a href="#" className="text-primary hover:underline">Terms of Service</a>
-            {" "}and{" "}
-            <a href="#" className="text-primary hover:underline">Privacy Policy</a>.
-          </p>
+                  <form className="space-y-4" onSubmit={handleEmailSignup}>
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1.5">
+                        Full name
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        autoComplete="name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="John Doe"
+                        className="w-full px-4 py-3 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1.5">
+                        Email address
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="you@company.com"
+                        className="w-full px-4 py-3 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-1.5">
+                        Password
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? "text" : "password"}
+                          required
+                          autoComplete="new-password"
+                          minLength={6}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="Min. 6 characters"
+                          className="w-full px-4 py-3 pr-11 rounded-xl bg-background border-2 border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={emailLoading || googleLoading}
+                      className="w-full flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold text-white bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25 hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 transition-all duration-200"
+                    >
+                      {emailLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                          Creating account…
+                        </>
+                      ) : (
+                        "Create account"
+                      )}
+                    </button>
+                  </form>
+                </>
+              )}
+
+              {emailDisabled && (
+                <div className="mt-6 flex items-start gap-2.5 p-3 rounded-xl bg-secondary/50 border border-border">
+                  <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Direct email registration is currently disabled by the administrator. Please use the Google option above.
+                  </p>
+                </div>
+              )}
+
+              <p className="mt-5 text-center text-xs text-muted-foreground leading-relaxed">
+                By signing up you agree to our{" "}
+                <a href="#" className="text-primary hover:underline">Terms of Service</a>
+                {" "}and{" "}
+                <a href="#" className="text-primary hover:underline">Privacy Policy</a>.
+              </p>
+            </>
+          )}
         </div>
 
-        <p className="mt-6 text-center text-sm text-muted-foreground">
-          Already have an account?{" "}
-          <Link href="/login" className="font-semibold text-primary hover:text-primary/80 transition-colors">
-            Log in
-          </Link>
-        </p>
+        {!isLoading && (
+          <p className="mt-6 text-center text-sm text-muted-foreground">
+            {emailDisabled ? "Already have an account? " : "Already have an account? "}
+            <Link href="/login" className="font-semibold text-primary hover:text-primary/80 transition-colors">
+              Log in
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

@@ -44,7 +44,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
         {!collapsed && (
           <span className="ml-3 font-display font-bold text-xl text-white tracking-tight whitespace-nowrap">
-            YTScraper
+            TubeVox
           </span>
         )}
 

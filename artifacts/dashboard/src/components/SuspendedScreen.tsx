@@ -37,7 +37,7 @@ export function SuspendedScreen({ profile }: Props) {
             Account Suspended
           </h1>
           <p className="text-muted-foreground">
-            Your account has been suspended and you are unable to access YTScraper at this time.
+            Your account has been suspended and you are unable to access TubeVox at this time.
           </p>
         </div>
 
@@ -84,10 +84,10 @@ export function SuspendedScreen({ profile }: Props) {
                 Contact support
               </p>
               <a
-                href="mailto:support@ytscraper.com"
+                href="mailto:support@tubevox.com"
                 className="text-sm text-primary hover:underline font-medium"
               >
-                support@ytscraper.com
+                support@tubevox.com
               </a>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Include your account email when writing to us.

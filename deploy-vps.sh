@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# VPS Deployment Script for YTScraper
+# VPS Deployment Script for TubeVox
 # Run this once on your VPS to set up everything automatically
 # ============================================================================
 
@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║       YTScraper VPS Deployment & Configuration Script         ║${NC}"
+echo -e "${BLUE}║       TubeVox VPS Deployment & Configuration Script         ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -59,7 +59,7 @@ fi
 echo -e "${GREEN}✓${NC} Creating .env file at $ENV_FILE"
 cat > "$ENV_FILE" << EOF
 # ===============================================================================
-# YTScraper Environment Configuration
+# TubeVox Environment Configuration
 # Generated: $(date)
 # ===============================================================================
 
@@ -158,7 +158,7 @@ pnpm --filter @workspace/admin run build
 echo -e "${GREEN}✓${NC} Admin built"
 
 echo "Building Landing Page..."
-pnpm --filter @workspace/ytscraper-landing run build
+pnpm --filter @workspace/tubevox-landing run build
 echo -e "${GREEN}✓${NC} Landing Page built"
 echo ""
 
@@ -219,7 +219,7 @@ module.exports = {
     },
     {
       name: 'landing',
-      script: 'artifacts/ytscraper-landing/dist/server.js',
+      script: 'artifacts/tubevox-landing/dist/server.js',
       cwd: '/var/www/Youtube_tubevox_ai',
       instances: 1,
       exec_mode: 'fork',

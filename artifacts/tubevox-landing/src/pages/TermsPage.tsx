@@ -15,12 +15,12 @@ export default function TermsPage() {
         <div className="space-y-10 text-gray-600 text-sm leading-relaxed">
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">1. Acceptance of terms</h2>
-            <p>By accessing or using YTScraper, you agree to be bound by these Terms of Service. If you do not agree, do not use our service.</p>
+            <p>By accessing or using TubeVox, you agree to be bound by these Terms of Service. If you do not agree, do not use our service.</p>
           </section>
 
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">2. Description of service</h2>
-            <p>YTScraper provides tools to extract and export publicly available YouTube comment data. Our service accesses only publicly accessible data through YouTube's official API.</p>
+            <p>TubeVox provides tools to extract and export publicly available YouTube comment data. Our service accesses only publicly accessible data through YouTube's official API.</p>
           </section>
 
           <section>

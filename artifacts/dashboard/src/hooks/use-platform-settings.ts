@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export interface PlatformSettings {
   maintenance_mode: boolean;
   new_signups_enabled: boolean;
+  email_signin_enabled: boolean;
 }
 
 const POLL_INTERVAL_MS = 60_000;
@@ -19,6 +20,7 @@ export function usePlatformSettings() {
       setSettings({
         maintenance_mode: data.maintenance_mode === "true",
         new_signups_enabled: data.new_signups_enabled !== "false",
+        email_signin_enabled: data.email_signin_enabled !== "false",
       });
     } catch {
       // silently ignore — don't block the app if this fails

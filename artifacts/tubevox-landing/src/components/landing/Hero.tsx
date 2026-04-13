@@ -118,7 +118,7 @@ export function Hero({ freeCredits, loading }: Props) {
                   <div className="w-3 h-3 rounded-full bg-[#10B981]"></div>
                 </div>
                 <div className="mx-auto px-4 py-1 bg-white border border-border rounded-md text-xs font-mono text-muted-foreground w-1/2 text-center whitespace-nowrap overflow-hidden text-ellipsis">
-                  ytscraper.com/dashboard/video_id=dQw4w9WgXcQ
+                  tubevox.com/dashboard/video_id=dQw4w9WgXcQ
                 </div>
               </div>
 

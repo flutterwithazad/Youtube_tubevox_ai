@@ -23,7 +23,7 @@ const testimonials = [
     name: "Sofia R.",
     role: "E-comm Founder",
     company: "Luxe Brands",
-    quote: "We use YTScraper to analyze feedback on product reviews. The Google Sheets integration means my whole team can view the data live."
+    quote: "We use TubeVox to analyze feedback on product reviews. The Google Sheets integration means my whole team can view the data live."
   },
   {
     name: "Rahul V.",
@@ -35,7 +35,7 @@ const testimonials = [
     name: "Lisa K.",
     role: "Ph.D Candidate",
     company: "State University",
-    quote: "I needed to scrape 50,000 comments for my thesis on digital communities. YTScraper handled it without breaking a sweat or rate limiting."
+    quote: "I needed to scrape 50,000 comments for my thesis on digital communities. TubeVox handled it without breaking a sweat or rate limiting."
   }
 ];
 

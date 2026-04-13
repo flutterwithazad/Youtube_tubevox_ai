@@ -33,7 +33,7 @@ ssh ${VPS_USER}@${VPS_IP} << 'DEPLOY_EOF'
   
   # Step 5: Rebuild landing with PORT env set
   echo "🔨 Step 5: Rebuilding landing..."
-  PORT=3002 pnpm --filter @workspace/ytscraper-landing run build
+  PORT=3002 pnpm --filter @workspace/tubevox-landing run build
   
   # Step 6: Restart services
   echo "♻️  Step 6: Restarting services..."

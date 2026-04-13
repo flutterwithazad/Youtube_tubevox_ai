@@ -9,7 +9,7 @@ router.get('/settings', async (req, res) => {
     const { data, error } = await supabase
       .from('platform_settings')
       .select('key,value')
-      .in('key', ['free_plan_credits', 'max_job_comments', 'maintenance_mode', 'new_signups_enabled',
+      .in('key', ['free_plan_credits', 'max_job_comments', 'maintenance_mode', 'new_signups_enabled', 'email_signin_enabled',
                   'contact_email', 'contact_phone', 'contact_address', 'contact_hours',
                   'company_name', 'company_email']);
     if (error) throw error;
