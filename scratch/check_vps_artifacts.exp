@@ -1,0 +1,20 @@
+#!/usr/bin/expect -f
+
+set timeout 300
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh $user@$host "ls -la /var/www/Youtube_tubevox_ai/artifacts"
+
+expect {
+    "password:" {
+        send "$password\r"
+        exp_continue
+    }
+    "(yes/no)?" {
+        send "yes\r"
+        exp_continue
+    }
+    eof
+}

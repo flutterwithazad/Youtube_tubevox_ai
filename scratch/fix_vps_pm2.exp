@@ -1,0 +1,20 @@
+#!/usr/bin/expect -f
+
+set timeout 300
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh $user@$host "cd /var/www/Youtube_tubevox_ai && git pull origin azad && bash fix-ecosystem.sh && pm2 delete all && pm2 start ecosystem.config.js && rm -rf artifacts/ytscraper-landing"
+
+expect {
+    "password:" {
+        send "$password\r"
+        exp_continue
+    }
+    "(yes/no)?" {
+        send "yes\r"
+        exp_continue
+    }
+    eof
+}
