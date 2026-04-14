@@ -1,0 +1,60 @@
+#!/usr/bin/expect -f
+
+set timeout 60
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+send "cd /var/www/Youtube_tubevox_ai\r"
+expect -re {[#$] }
+
+puts "\n=== PM2 STATUS ===\n"
+send "pm2 list\r"
+expect -re {[#$] }
+
+puts "\n=== ENDPOINT HEALTH CHECKS ===\n"
+send "curl -s -o /dev/null -w 'Dashboard (3000): %{http_code}\n' http://localhost:3000\r"
+expect -re {[#$] }
+send "curl -s -o /dev/null -w 'Admin (3001): %{http_code}\n' http://localhost:3001\r"
+expect -re {[#$] }
+send "curl -s -o /dev/null -w 'Landing (3002): %{http_code}\n' http://localhost:3002\r"
+expect -re {[#$] }
+send "curl -s -w 'API Settings: %{http_code} | Response: ' http://localhost:8080/api/public/settings 2>&1 | head -3\r"
+expect -re {[#$] }
+
+puts "\n=== API SERVER LOGS (last 30 lines) ===\n"
+send "pm2 logs api-server --lines 30 --nostream 2>&1 | grep -v 'Tailing\\|last 30' | tail -25\r"
+expect -timeout 15 -re {[#$] }
+
+puts "\n=== NGINX STATUS ===\n"
+send "nginx -t 2>&1 && systemctl is-active nginx\r"
+expect -timeout 10 -re {[#$] }
+
+puts "\n=== LIVE DOMAIN CHECKS ===\n"
+send "curl -sk -o /dev/null -w 'https://tubevox.com: %{http_code}\n' https://tubevox.com\r"
+expect -timeout 15 -re {[#$] }
+send "curl -sk -o /dev/null -w 'https://tubevox.com/dashboard/login: %{http_code}\n' https://tubevox.com/dashboard/login\r"
+expect -timeout 15 -re {[#$] }
+send "curl -sk -w 'API live: %{http_code} | ' https://tubevox.com/api/public/settings 2>&1 | head -2\r"
+expect -timeout 15 -re {[#$] }
+
+puts "\n=== API SERVER ENV VARS ===\n"
+send "pm2 env 0 2>&1 | grep -E 'SUPABASE|PORT|NODE_ENV|SERVICE_ROLE' | grep -v 'KEY.*eyJ' | head -10\r"
+expect -timeout 10 -re {[#$] }
+send "pm2 env 0 2>&1 | grep -c 'SUPABASE_SERVICE_ROLE_KEY'\r"
+expect -timeout 10 -re {[#$] }
+
+puts "\n=== CHECK API-SERVER DIST ===\n"
+send "ls artifacts/api-server/dist/ 2>/dev/null | head -10 || echo 'NO DIST'\r"
+expect -timeout 10 -re {[#$] }
+
+send "exit\r"
+expect eof

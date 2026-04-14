@@ -1,0 +1,28 @@
+#!/usr/bin/expect -f
+
+set timeout 60
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+send "cd /var/www/Youtube_tubevox_ai\r"
+expect -re {[#$] }
+
+# Check if .env exists on VPS
+send "cat .env 2>/dev/null || echo 'NO .env FILE'\r"
+expect -timeout 10 -re {[#$] }
+
+# Check ecosystem config env section
+send "grep -A 30 'api-server' ecosystem.config.js | grep -E 'SUPABASE|SERVICE_ROLE|URL'\r"
+expect -timeout 10 -re {[#$] }
+
+send "exit\r"
+expect eof

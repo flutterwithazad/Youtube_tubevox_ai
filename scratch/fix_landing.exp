@@ -1,0 +1,41 @@
+#!/usr/bin/expect -f
+
+set timeout 180
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+# Check ecosystem config
+send "cat /var/www/Youtube_tubevox_ai/ecosystem.config.js\r"
+expect -timeout 15 -re {[#$] }
+
+# Check tubevox-landing structure
+send "ls /var/www/Youtube_tubevox_ai/artifacts/tubevox-landing/\r"
+expect -timeout 10 -re {[#$] }
+
+send "ls /var/www/Youtube_tubevox_ai/artifacts/tubevox-landing/dist/ 2>/dev/null | head -5 || echo 'NO DIST'\r"
+expect -timeout 10 -re {[#$] }
+
+# Build the landing page
+puts "\n🔨 Building landing page...\n"
+send "cd /var/www/Youtube_tubevox_ai && PORT=3002 pnpm --filter @workspace/tubevox-landing build 2>&1 | tail -10\r"
+expect -timeout 120 -re {[#$] }
+
+# Check if dist was created
+send "ls /var/www/Youtube_tubevox_ai/artifacts/tubevox-landing/dist/ 2>/dev/null | head -5 || echo 'STILL NO DIST'\r"
+expect -timeout 10 -re {[#$] }
+
+# Restart landing
+send "pm2 restart landing && sleep 3 && curl -s -o /dev/null -w 'Landing: %{http_code}\n' http://localhost:3002\r"
+expect -timeout 30 -re {[#$] }
+
+send "exit\r"
+expect eof

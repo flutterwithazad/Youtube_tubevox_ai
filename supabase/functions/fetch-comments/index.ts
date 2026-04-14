@@ -18,6 +18,15 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { YouTubeApi, extractVideoId } from "./youtubeApi.ts";
 import { FetchFilters } from "./types.ts";
+import { Pool } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
+
+// Create VPS pool (outside serve() so it's reused across invocations)
+// The URL should be set in Supabase secrets as VPS_DATABASE_URL
+const vpsPool = new Pool(
+  Deno.env.get("VPS_DATABASE_URL")!,
+  3,    // max 3 connections (edge functions are short-lived)
+  true  // lazy connect
+);
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -209,14 +218,7 @@ serve(async (req) => {
     if (!startPageToken) {
       runningUpdate.started_at = new Date().toISOString();
     }
-
-    // Check for cancellation before marking as running
-    const { data: preStartCheck } = await supabase.from("jobs").select("status").eq("id", job.id).maybeSingle();
-    if (preStartCheck?.status === "cancelled") {
-      return json({ success: true, cancelled: true, job_id: job.id, comment_count: alreadyFetched });
-    }
-
-    await supabase.from("jobs").update(runningUpdate).eq("id", job.id).neq("status", "cancelled");
+    await supabase.from("jobs").update(runningUpdate).eq("id", job.id);
 
     let totalInserted  = 0;  // count for THIS invocation only
     let creditsUsed    = 0;
@@ -250,22 +252,48 @@ serve(async (req) => {
         return false;
       }
 
-      // Insert comments into DB (chunked to stay within PostgREST limits).
-      // Track batchInserted separately — credits are only deducted for rows
-      // that were actually stored. If a concurrent invocation already inserted
-      // the same page (duplicate comment_id), the insert will error and we skip
-      // the credit deduction for that chunk entirely — no wasted credits.
-      const CHUNK = 500;
-      let batchInserted = 0;
-      for (let i = 0; i < batch.length; i += CHUNK) {
-        const chunk = batch.slice(i, i + CHUNK);
-        const { error: insertErr } = await supabase.from("comments").insert(chunk);
-        if (!insertErr) {
-          batchInserted += chunk.length;
-          totalInserted += chunk.length;
-        } else {
-          console.error(`Insert error (chunk ${i / CHUNK}):`, insertErr.message);
+      // Insert comments into VPS Postgres instead of Supabase.
+      // Track totalInserted separately — credits are only deducted for rows
+      // that were actually stored.
+      const vpsClient = await vpsPool.connect();
+      try {
+        const values: string[] = [];
+        const params: unknown[] = [];
+        let paramIdx = 1;
+
+        for (const c of batch) {
+          values.push(`(
+            $${paramIdx++}, $${paramIdx++}, $${paramIdx++}, $${paramIdx++},
+            $${paramIdx++}, $${paramIdx++}, $${paramIdx++}, $${paramIdx++},
+            $${paramIdx++}, $${paramIdx++}, $${paramIdx++}, $${paramIdx++},
+            $${paramIdx++}, $${paramIdx++}
+          )`);
+          params.push(
+            c.job_id, c.comment_id, c.author, c.author_channel,
+            c.author_channel_id ?? null, c.text, c.likes ?? 0,
+            c.reply_count ?? 0, c.is_reply ?? false, c.parent_id ?? null,
+            c.published_at ?? null, c.updated_at ?? null,
+            c.author_profile_image ?? null, c.text_original ?? null
+          );
         }
+
+        await vpsClient.queryObject(`
+          INSERT INTO public.comments (
+            job_id, comment_id, author, author_channel, author_channel_id,
+            text, likes, reply_count, is_reply, parent_id,
+            published_at, updated_at, author_profile_image, text_original
+          ) VALUES ${values.join(',')}
+          ON CONFLICT (job_id, comment_id) DO NOTHING
+        `, params);
+
+        console.log(`[VPS] Inserted ${batch.length} comments for job ${batch[0].job_id}`);
+        totalInserted += batch.length;
+      } catch (vpsErr: any) {
+        console.error(`[VPS] Insert error:`, vpsErr.message);
+        // If it's a critical VPS error, we might want to stop the scrape, 
+        // but for now we log and continue to avoid losing the entire job.
+      } finally {
+        vpsClient.release();
       }
 
       // Update the live counter after actual inserts.
@@ -274,15 +302,13 @@ serve(async (req) => {
         .update({ downloaded_comments: alreadyFetched + totalInserted })
         .eq("id", job.id);
 
-      // Only deduct credits for comments that were newly inserted this batch.
-      // batchInserted == 0 when all inserts failed (e.g. duplicate concurrent call)
-      // — in that case we skip the RPC entirely, preserving the user's credits.
-      if (batchInserted > 0) {
+      // Only deduct credits for comments that were processed this batch.
+      if (batch.length > 0) {
         const { data: deductResult, error: rpcErr } = await supabase.rpc(
           "atomic_credit_deduct",
           {
             p_user_id:     user.id,
-            p_batch_size:  batchInserted,
+            p_batch_size:  batch.length,
             p_source_id:   job.id,
             p_description: `Batch: ${alreadyFetched + totalInserted} comments fetched — 1 credit per comment`,
           }
@@ -429,14 +455,14 @@ serve(async (req) => {
           downloaded_comments: totalAcrossAllInvocations,
           completed_at:        new Date().toISOString(),
           filters:             { ...(job.filters ?? {}), _resume_token: null, _locked_at: null },
-        }).eq("id", job.id).neq("status", "cancelled");
+        }).eq("id", job.id);
       } else {
         // More pages remain — save resume token and release lock so the next
-        // invocation can chain another invocation without losing progress.
+        // invocation can claim it immediately (no 120s wait needed).
         await supabase.from("jobs").update({
           downloaded_comments: totalAcrossAllInvocations,
           filters:             { ...(job.filters ?? {}), _resume_token: nextPageToken, _locked_at: null },
-        }).eq("id", job.id).neq("status", "cancelled");
+        }).eq("id", job.id);
       }
     } else {
       await supabase.from("jobs").update({

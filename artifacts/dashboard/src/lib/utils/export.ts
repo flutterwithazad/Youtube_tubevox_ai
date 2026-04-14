@@ -2,21 +2,20 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 
 export const fetchAllCommentsForExport = async (jobId: string): Promise<any[]> => {
-  const all: any[] = [];
-  let offset = 0;
-  while (true) {
-    const { data } = await supabase
-      .from("comments")
-      .select("*")
-      .eq("job_id", jobId)
-      .order("likes", { ascending: false })
-      .range(offset, offset + 999);
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < 1000) break;
-    offset += 1000;
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+
+  const res = await fetch(`/api/comments/export?jobId=${jobId}&format=json`, {
+    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+  });
+  
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Fetch failed' }));
+    throw new Error(err.error || `Export failed with status ${res.status}`);
   }
-  return all;
+  
+  const data = await res.json();
+  return data.comments ?? [];
 };
 
 export const recordExport = async (jobId: string, format: string, rowCount: number) => {

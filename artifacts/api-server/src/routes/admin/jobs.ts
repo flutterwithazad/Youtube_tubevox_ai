@@ -35,7 +35,11 @@ router.get('/:id', async (req, res) => {
     const admin = requireAdmin(req);
     const supabase = createSupabaseAdmin();
     const { data: job } = await supabase.from('jobs').select('*,profiles(email)').eq('id', req.params.id).single();
-    const { data: comments } = await supabase.from('comments').select('*').eq('job_id', req.params.id).order('likes', { ascending: false }).limit(100);
+    
+    // Fetch comments from VPS
+    const { getCommentsByJob } = await import('../../lib/vps-db.js');
+    const comments = await getCommentsByJob(req.params.id, { limit: 100, orderBy: 'likes' });
+
     await logAdminAction({ adminId: admin.adminId, action: 'job.view', targetType: 'job', targetId: req.params.id });
     return res.json({ job, comments });
   } catch (e: any) {

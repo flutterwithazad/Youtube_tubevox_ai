@@ -1,0 +1,125 @@
+#!/usr/bin/expect -f
+
+set timeout 60
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+send "cd /var/www/Youtube_tubevox_ai\r"
+expect -re {[#$] }
+
+# Update ecosystem.config.js to load env from .env file
+send {cat > ecosystem.config.js << 'ECOSYSTEM_EOF'
+const fs = require('fs');
+const path = require('path');
+
+// Load .env file
+function loadEnv() {
+  try {
+    const envFile = path.join(__dirname, '.env');
+    const lines = fs.readFileSync(envFile, 'utf8').split('\n');
+    const env = {};
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx > 0) {
+        env[trimmed.slice(0, idx)] = trimmed.slice(idx + 1);
+      }
+    }
+    return env;
+  } catch (e) {
+    return {};
+  }
+}
+
+const envVars = loadEnv();
+
+module.exports = {
+  apps: [
+    {
+      name: 'api-server',
+      script: 'artifacts/api-server/dist/index.cjs',
+      cwd: '/var/www/Youtube_tubevox_ai',
+      instances: 1,
+      exec_mode: 'fork',
+      env: {
+        NODE_ENV: 'production',
+        PORT: 8080,
+        ...envVars,
+      },
+      error_file: '/var/log/pm2/api-server-error.log',
+      out_file: '/var/log/pm2/api-server-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    },
+    {
+      name: 'dashboard',
+      script: 'npx',
+      args: 'serve -l 3000 -s artifacts/dashboard/dist',
+      cwd: '/var/www/Youtube_tubevox_ai',
+      instances: 1,
+      exec_mode: 'fork',
+      env: { NODE_ENV: 'production', PORT: 3000 },
+      error_file: '/var/log/pm2/dashboard-error.log',
+      out_file: '/var/log/pm2/dashboard-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    },
+    {
+      name: 'admin',
+      script: 'npx',
+      args: 'serve -l 3001 -s artifacts/admin/dist',
+      cwd: '/var/www/Youtube_tubevox_ai',
+      instances: 1,
+      exec_mode: 'fork',
+      env: { NODE_ENV: 'production', PORT: 3001 },
+      error_file: '/var/log/pm2/admin-error.log',
+      out_file: '/var/log/pm2/admin-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    },
+    {
+      name: 'landing',
+      script: 'npx',
+      args: 'serve -l 3002 -s artifacts/tubevox-landing/dist',
+      cwd: '/var/www/Youtube_tubevox_ai',
+      instances: 1,
+      exec_mode: 'fork',
+      env: { NODE_ENV: 'production', PORT: 3002 },
+      error_file: '/var/log/pm2/landing-error.log',
+      out_file: '/var/log/pm2/landing-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    },
+  ],
+};
+ECOSYSTEM_EOF
+}
+
+expect -timeout 10 -re {[#$] }
+
+puts "\n✅ ecosystem.config.js updated\n"
+
+# Delete and restart with updated env
+send "pm2 delete api-server && pm2 start ecosystem.config.js --only api-server && sleep 3\r"
+expect -timeout 30 -re {[#$] }
+
+# Test API
+send "curl -s http://localhost:8080/api/public/settings | head -c 200\r"
+expect -timeout 15 -re {[#$] }
+
+# Save pm2 config so it persists on reboot
+send "pm2 save\r"
+expect -timeout 15 -re {[#$] }
+
+puts "\n=== FINAL STATUS ===\n"
+send "pm2 list\r"
+expect -timeout 10 -re {[#$] }
+
+send "exit\r"
+expect eof

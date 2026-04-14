@@ -1,0 +1,19 @@
+#!/usr/bin/expect -f
+
+set timeout 60
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+}
+expect -re {[#$] }
+
+send "supabase --version\r"
+expect -re {[#$] }
+
+send "exit\r"
+expect eof

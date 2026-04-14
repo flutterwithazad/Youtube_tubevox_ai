@@ -1,0 +1,27 @@
+#!/usr/bin/expect -f
+
+set timeout 180
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+send "cd /var/www/Youtube_tubevox_ai && git pull origin main\r"
+expect -timeout 30 -re {[#$] }
+
+send {export $(grep -v '^#' .env | xargs) && PORT=3000 BASE_PATH=/dashboard/ pnpm --filter @workspace/dashboard build 2>&1 | tail -8}
+send "\r"
+expect -timeout 180 -re {[#$] }
+
+send "pm2 restart dashboard && sleep 2 && curl -s -o /dev/null -w 'Dashboard: %{http_code}\n' http://localhost:3000\r"
+expect -timeout 30 -re {[#$] }
+
+send "exit\r"
+expect eof

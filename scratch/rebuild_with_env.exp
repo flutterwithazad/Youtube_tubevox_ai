@@ -1,0 +1,61 @@
+#!/usr/bin/expect -f
+
+set timeout 300
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+send "cd /var/www/Youtube_tubevox_ai\r"
+expect -re {[#$] }
+
+puts "\n📦 Sourcing .env and rebuilding dashboard with correct Supabase URL...\n"
+
+# Export .env vars then build
+send {export $(grep -v '^#' .env | xargs) && echo "ENV LOADED: VITE_SUPABASE_URL=$VITE_SUPABASE_URL"}
+send "\r"
+expect -timeout 10 -re {[#$] }
+
+# Rebuild dashboard with env vars properly set
+send {export $(grep -v '^#' .env | xargs) && PORT=3000 BASE_PATH=/dashboard/ pnpm --filter @workspace/dashboard build 2>&1 | tail -15}
+send "\r"
+expect -timeout 180 -re {[#$] }
+
+# Rebuild landing too with env vars
+send {export $(grep -v '^#' .env | xargs) && PORT=3002 pnpm --filter @workspace/tubevox-landing build 2>&1 | tail -10}
+send "\r"
+expect -timeout 180 -re {[#$] }
+
+# Verify the built JS has the real Supabase URL (not placeholder)
+puts "\n🔍 Verifying Supabase URL is baked into dashboard build...\n"
+send {grep -r "jxceenqmcyclbxaxvxto" artifacts/dashboard/dist/assets/*.js | head -1 | cut -c1-100}
+send "\r"
+expect -timeout 10 -re {[#$] }
+
+send {grep -r "placeholder-url" artifacts/dashboard/dist/assets/*.js | head -1 || echo "GOOD: No placeholder found"}
+send "\r"
+expect -timeout 10 -re {[#$] }
+
+# Restart services
+puts "\n♻️ Restarting dashboard and landing...\n"
+send "pm2 restart dashboard landing && sleep 3\r"
+expect -timeout 30 -re {[#$] }
+
+# Final checks
+send "curl -s -o /dev/null -w 'Dashboard: %{http_code}\n' http://localhost:3000\r"
+expect -timeout 15 -re {[#$] }
+send "curl -s -o /dev/null -w 'Landing: %{http_code}\n' http://localhost:3002\r"
+expect -timeout 15 -re {[#$] }
+
+send "pm2 list\r"
+expect -timeout 10 -re {[#$] }
+
+send "exit\r"
+expect eof
