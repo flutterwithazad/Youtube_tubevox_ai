@@ -6,8 +6,9 @@ const router: IRouter = Router();
 router.get("/healthz", async (_req, res) => {
   let dbStatus = "ok";
   try {
-    const { pool } = await import("../lib/vps-db.js");
-    const result = await pool.query("SELECT 1");
+    const { getVpsPool } = await import("../lib/vps-db.js");
+    const vpsPool = getVpsPool();
+    const result = await vpsPool.query("SELECT 1");
     if (!result.rows.length) dbStatus = "db_error";
   } catch (err: any) {
     console.error("Health check DB error:", err.message);
