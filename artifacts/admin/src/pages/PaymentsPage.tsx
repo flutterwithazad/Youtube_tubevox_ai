@@ -16,6 +16,7 @@ export default function PaymentsPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<any>(null);
+  const [chartData, setChartData] = useState<any[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = () => {
@@ -23,6 +24,7 @@ export default function PaymentsPage() {
     api.get(`/admin/payments?${new URLSearchParams({ page: String(page), tab })}`).then(d => {
       setData(d.data ?? []); setCount(d.count ?? 0);
       if (d.stats) setStats(d.stats);
+      if (d.chart) setChartData(d.chart);
     }).finally(() => setLoading(false));
   };
 
@@ -47,6 +49,34 @@ export default function PaymentsPage() {
           <StatCard label="This Month" value={`$${(stats.monthlyRevenue ?? 0).toFixed(2)}`} icon={DollarSign} color="indigo" />
           <StatCard label="Failed Payments" value={stats.failedCount ?? 0} color="red" />
           <StatCard label="Refunds Issued" value={stats.refundCount ?? 0} color="amber" />
+        </div>
+      )}
+      {chartData.length > 0 && (
+        <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 mb-6">
+          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">Daily Revenue (Last 30 Days)</h3>
+          <div className="h-32 flex items-end gap-1.5">
+            {chartData.map((d: any) => {
+              const max = Math.max(...chartData.map(x => x.revenue || 0), 10);
+              const height = ((d.revenue || 0) / max) * 100;
+              return (
+                <div key={d.purchase_date} className="flex-1 group relative">
+                  <div 
+                    className="w-full bg-indigo-100 group-hover:bg-indigo-500 transition-colors rounded-t-sm" 
+                    style={{ height: `${Math.max(4, height)}%` }} 
+                  />
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
+                    <div className="bg-gray-900 text-white text-[10px] py-1 px-2 rounded whitespace-nowrap">
+                      ${d.revenue} ({d.successful} sales)
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex justify-between mt-2 text-[10px] text-gray-400">
+             <span>{new Date(chartData[chartData.length - 1].purchase_date).toLocaleDateString()}</span>
+             <span>{new Date(chartData[0].purchase_date).toLocaleDateString()}</span>
+          </div>
         </div>
       )}
 

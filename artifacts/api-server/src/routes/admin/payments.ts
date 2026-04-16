@@ -35,7 +35,13 @@ router.get('/', async (req, res) => {
     const totalRevenue = (allRevenue.data ?? []).reduce((s, r) => s + Number(r.price_paid), 0);
     const monthlyRevenue = (monthRevenue.data ?? []).reduce((s, r) => s + Number(r.price_paid), 0);
 
-    return res.json({ data, count, page, limit, stats: { totalRevenue, monthlyRevenue, failedCount: failedCount.count, refundCount: refundCount.count } });
+    const { data: dailySummary } = await supabase.from('daily_purchase_summary').select('*').limit(30);
+
+    return res.json({ 
+      data, count, page, limit, 
+      stats: { totalRevenue, monthlyRevenue, failedCount: failedCount.count, refundCount: refundCount.count },
+      chart: dailySummary ?? []
+    });
   } catch (e: any) {
     return res.status(500).json({ error: e.message });
   }
