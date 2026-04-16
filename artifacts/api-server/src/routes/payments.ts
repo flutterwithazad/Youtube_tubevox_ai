@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
-import { Webhook } from 'standardwebhooks';
+import * as Webhooks from 'standardwebhooks';
+const Webhook = (Webhooks as any).Webhook || (Webhooks as any).default || Webhooks;
 import { getDodoClient, getPaymentMode, getWebhookSecret } from '../lib/dodo.js';
 import { createSupabaseAdmin } from '../lib/supabase-admin.js';
 import { createClient } from '@supabase/supabase-js';

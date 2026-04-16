@@ -1,5 +1,6 @@
-import DodoPayments from 'dodopayments';
-import { supabaseAdmin } from './supabase-admin.js';
+import * as Dodo from 'dodopayments';
+const DodoPayments = (Dodo as any).default || Dodo.DodoPayments || Dodo;
+import { createSupabaseAdmin } from './supabase-admin.js';
 
 type PaymentMode = 'test' | 'live';
 
@@ -7,6 +8,7 @@ type PaymentMode = 'test' | 'live';
  * Get current payment mode from DB (platform_settings)
  */
 export async function getPaymentMode(): Promise<PaymentMode> {
+  const supabaseAdmin = createSupabaseAdmin();
   const { data } = await supabaseAdmin
     .from('platform_settings')
     .select('value')
@@ -20,6 +22,7 @@ export async function getPaymentMode(): Promise<PaymentMode> {
  * Initialize and return a Dodo client based on current mode
  */
 export async function getDodoClient(): Promise<DodoPayments> {
+  const supabaseAdmin = createSupabaseAdmin();
   const mode = await getPaymentMode();
   const keyName = mode === 'live' ? 'dodo_live_api_key' : 'dodo_test_api_key';
 
@@ -45,6 +48,7 @@ export async function getDodoClient(): Promise<DodoPayments> {
  * Get webhook secret for the current mode
  */
 export async function getWebhookSecret(): Promise<string> {
+  const supabaseAdmin = createSupabaseAdmin();
   const mode = await getPaymentMode();
   const keyName = mode === 'live' ? 'dodo_live_webhook_secret' : 'dodo_test_webhook_secret';
 
