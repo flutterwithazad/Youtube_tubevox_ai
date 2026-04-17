@@ -29,12 +29,16 @@ $SSH_CMD << 'DEPLOY_EOF'
   echo "📦 Step 3: Updating dependencies..."
   pnpm install
   
-  # Step 4: Rebuild API Server
-  echo "🔨 Step 4: Rebuilding API Server..."
+  # Step 4: Clean old builds (to force fresh assets)
+  echo "🧹 Step 4: Cleaning old builds..."
+  rm -rf artifacts/dashboard/dist artifacts/admin/dist artifacts/tubevox-landing/dist artifacts/api-server/dist
+  
+  # Step 5: Rebuild API Server
+  echo "🔨 Step 5: Rebuilding API Server..."
   pnpm --filter @workspace/api-server run build
   
-  # Step 5: Rebuild Frontend Panels (React/Vite)
-  echo "🔨 Step 5: Rebuilding Frontend Panels..."
+  # Step 6: Rebuild Frontend Panels (React/Vite)
+  echo "🔨 Step 6: Rebuilding Frontend Panels..."
   
   echo "  → Dashboard..."
   PORT=3000 pnpm --filter @workspace/dashboard run build
@@ -45,17 +49,17 @@ $SSH_CMD << 'DEPLOY_EOF'
   echo "  → Landing Page..."
   PORT=3002 pnpm --filter @workspace/tubevox-landing run build
   
-  # Step 6: Restart services via PM2
-  echo "♻️  Step 6: Restarting all services..."
+  # Step 7: Restart services via PM2
+  echo "♻️  Step 7: Restarting all services..."
   pm2 restart ecosystem.config.js --env production
   
   echo "⏳ Waiting for services to stabilize..."
   sleep 5
   pm2 status
   
-  # Step 7: Final Verification
+  # Step 8: Final Verification
   echo ""
-  echo "✅ Step 7: Verifying services..."
+  echo "✅ Step 8: Verifying services..."
   echo ""
   
   # Check local ports on VPS
