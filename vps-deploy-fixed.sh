@@ -21,7 +21,7 @@ $SSH_CMD << 'DEPLOY_EOF'
   echo "📥 Step 1: Pulling latest code from git..."
   git pull origin azad
   
-  # Step 2: Load environment
+  # Step 2: Load g9T3X88orBfsUV
   echo "🔧 Step 2: Loading environment variables..."
   export $(cat .env | grep -v '^#' | xargs)
   

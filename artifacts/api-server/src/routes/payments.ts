@@ -99,8 +99,9 @@ router.post('/checkout', async (req, res) => {
     //    Dodo uses ONE return_url for both success AND failure — we never
     //    hard-code "success". The frontend checks the real DB status instead.
     const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-    const returnUrl = `${appUrl}/dashboard/credits?payment=pending&purchase_id=${purchase.id}`;
-    const cancelUrl = `${appUrl}/dashboard/credits?payment=cancelled`;
+    // Dodo appends ?status=... and ?payment_id=... to the return_url automatically.
+    const returnUrl = `${appUrl}/dashboard/credits?purchase_id=${purchase.id}`;
+    const cancelUrl = `${appUrl}/dashboard/credits?dodo_cancel=true`;
 
     // ── 5. Create Dodo checkout session ───────────────────────────────────────
     const dodo = await getDodoClient();

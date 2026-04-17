@@ -10,6 +10,13 @@ ALTER TABLE public.package_purchases
   ADD COLUMN IF NOT EXISTS dodo_customer_id TEXT,
   ADD COLUMN IF NOT EXISTS checkout_url TEXT;
 
+-- Update check constraint to allow dodopayments
+ALTER TABLE public.package_purchases 
+  DROP CONSTRAINT IF EXISTS package_purchases_payment_provider_check;
+ALTER TABLE public.package_purchases 
+  ADD CONSTRAINT package_purchases_payment_provider_check 
+  CHECK (payment_provider IN ('stripe', 'razorpay', 'dodopayments', 'manual'));
+
 -- Index for fast webhook lookups
 CREATE INDEX IF NOT EXISTS idx_package_purchases_dodo_payment_id
   ON public.package_purchases (dodo_payment_id);

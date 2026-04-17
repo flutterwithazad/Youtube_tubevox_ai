@@ -60,7 +60,8 @@ export default function Credits() {
 
   // Read URL params once on mount — don't re-derive every render
   const urlParams         = useMemo(() => new URLSearchParams(window.location.search), []);
-  const urlPaymentState   = urlParams.get('payment');   // 'pending' | 'cancelled' | null
+  const urlDodoStatus     = urlParams.get('status');      // 'succeeded' | 'failed' | 'cancelled'
+  const urlDodoCancel     = urlParams.get('dodo_cancel'); // our custom cancel flag
   const urlPurchaseId     = urlParams.get('purchase_id');
 
   const { user } = useAuth();
@@ -113,19 +114,25 @@ export default function Credits() {
   // purchase row in the database until it reaches a terminal state.
   //
   useEffect(() => {
-    // Always clear payment-related params from the URL immediately
     const cleanUrl = new URL(window.location.href);
-    cleanUrl.searchParams.delete('payment');
+    cleanUrl.searchParams.delete('status');
     cleanUrl.searchParams.delete('purchase_id');
-    cleanUrl.searchParams.delete('pkg');   // legacy
+    cleanUrl.searchParams.delete('dodo_cancel');
+    cleanUrl.searchParams.delete('payment_id');
     window.history.replaceState({}, '', cleanUrl.pathname);
 
-    if (urlPaymentState === 'cancelled') {
+    if (urlDodoCancel === 'true' || urlDodoStatus === 'cancelled') {
       toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
       return;
     }
 
-    if (urlPaymentState === 'pending' && urlPurchaseId) {
+    if (urlDodoStatus === 'failed') {
+      setPollState('failed');
+      toast.error('Payment failed. Please try again or use a different payment method.');
+      return;
+    }
+
+    if (urlPurchaseId) {
       setPollState('polling');
       pollCountRef.current = 0;
       startPolling(urlPurchaseId);
