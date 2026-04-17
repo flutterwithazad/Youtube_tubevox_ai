@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "YTScraper Landing Page"
+title = "TubeVox Landing Page"
 version = "1.0.0"
 id = "artifacts/ytscraper-landing"
 router = "path"
@@ -15,11 +15,11 @@ paths = [ "/" ]
 localPort = 22696
 
 [services.development]
-run = "pnpm --filter @workspace/ytscraper-landing run dev"
+run = "pnpm --filter @workspace/tubevox-landing run dev"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/ytscraper-landing", "run", "build" ]
-publicDir = "artifacts/ytscraper-landing/dist/public"
+build = [ "pnpm", "--filter", "@workspace/tubevox-landing", "run", "build" ]
+publicDir = "artifacts/tubevox-landing/dist/public"
 serve = "static"
 
 [[services.production.rewrites]]
