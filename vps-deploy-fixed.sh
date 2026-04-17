@@ -18,8 +18,9 @@ $SSH_CMD << 'DEPLOY_EOF'
   cd /var/www/Youtube_tubevox_ai
   
   # Step 1: Pull latest code
-  echo "📥 Step 1: Pulling latest code from git..."
-  git pull origin azad
+  echo "📥 Step 1: Pulling latest code from git (Forced)..."
+  git fetch origin azad
+  git reset --hard origin/azad
   
   # Step 2: Load g9T3X88orBfsUV
   echo "🔧 Step 2: Loading environment variables..."
