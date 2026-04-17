@@ -201,12 +201,24 @@ router.post('/webhook', async (req: any, res) => {
   // ── Signature verification ────────────────────────────────────────────────
   try {
     const secret  = await getWebhookSecret();
+    if (!secret) {
+      console.error('[WEBHOOK ERROR] No webhook secret found in platform_settings!');
+      return res.status(401).json({ error: 'Secret not configured' });
+    }
+
     const webhook = new Webhook(secret);
-    await webhook.verify(rawBody, {
-      'webhook-id':        webhookId,
-      'webhook-signature': webhookSignature,
-      'webhook-timestamp': webhookTimestamp,
-    });
+    
+    // Verify signature
+    try {
+      webhook.verify(rawBody, {
+        'webhook-id':        webhookId,
+        'webhook-signature': webhookSignature,
+        'webhook-timestamp': webhookTimestamp,
+      });
+    } catch (err: any) {
+      console.error('[WEBHOOK ERROR] Signature verification failed:', err.message);
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
   } catch (err: any) {
     console.error('[WEBHOOK] Signature verification failed:', err.message);
     return res.status(401).json({ error: 'Invalid signature' });
