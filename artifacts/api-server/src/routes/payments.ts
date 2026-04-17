@@ -162,17 +162,22 @@ router.post('/webhook', async (req: any, res) => {
 
   console.log(`[WEBHOOK] Received ${eventType} for payment ${payload.data?.payment_id}`);
 
-  // Log raw event
-  await supabaseAdmin.from('payment_transactions').insert({
-    user_id: payload.data?.metadata?.user_id || null,
-    provider: 'dodopayments',
-    provider_event_id: webhookId,
-    event_type: eventType,
-    amount: payload.data?.total_amount || payload.data?.amount || 0,
-    currency: payload.data?.currency || 'USD',
-    status: eventType.includes('succeeded') ? 'success' : eventType.includes('failed') ? 'failed' : 'pending',
-    raw_payload: payload,
-  });
+  // Log raw event — skip if user_id is missing (NOT NULL constraint)
+  const logUserId = payload.data?.metadata?.user_id;
+  if (logUserId) {
+    supabaseAdmin.from('payment_transactions').insert({
+      user_id: logUserId,
+      provider: 'dodopayments',
+      provider_event_id: webhookId,
+      event_type: eventType,
+      amount: payload.data?.total_amount || payload.data?.amount || 0,
+      currency: payload.data?.currency || 'USD',
+      status: eventType.includes('succeeded') ? 'success' : eventType.includes('failed') ? 'failed' : 'pending',
+      raw_payload: payload,
+    }).then(({ error }) => {
+      if (error) console.error('[WEBHOOK] Failed to log payment_transaction:', error.message);
+    });
+  }
 
   // Handle events
   try {
