@@ -9,7 +9,8 @@ const app: Express = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({
   verify: (req: any, _res, buf) => {
-    if (req.originalUrl.startsWith('/api/payments/webhook')) {
+    // Capture raw body for any request going to a webhook endpoint
+    if (req.originalUrl.includes('/webhook')) {
       req.rawBody = buf.toString();
     }
   }

@@ -189,6 +189,7 @@ router.post('/webhook', async (req: any, res) => {
     return res.status(400).json({ error: 'Missing body' });
   }
 
+  const rawBody = (req as any).rawBody || '';
   const webhookId        = req.headers['webhook-id']        as string;
   const webhookSignature = req.headers['webhook-signature'] as string;
   const webhookTimestamp = req.headers['webhook-timestamp'] as string;
