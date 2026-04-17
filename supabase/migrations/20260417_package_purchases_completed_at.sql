@@ -1,0 +1,4 @@
+-- 20260417_package_purchases_completed_at.sql
+-- completed_at already exists from the original schema.
+-- This migration is intentionally minimal — no changes needed.
+-- (cancelled_at not added as it is not required by the current payment flow.)

@@ -1,8 +1,8 @@
 import { useLocation } from "wouter";
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { Zap, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2, PlayCircle } from "lucide-react";
+import { Zap, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2, PlayCircle, AlertCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useCredits } from "@/hooks/use-credits";
 import { supabase } from "@/lib/supabase";
@@ -52,20 +52,33 @@ interface GroupedJobTx {
 const JOBS_PER_PAGE = 10;
 const CREDITS_PER_PAGE = 10;
 
+// Payment poll state
+type PollState = 'idle' | 'polling' | 'completed' | 'failed' | 'cancelled' | 'timeout';
+
 export default function Credits() {
   const [location] = useLocation();
-  const searchParams = new URLSearchParams(window.location.search);
-  const paymentStatus = searchParams.get('payment');
+
+  // Read URL params once on mount — don't re-derive every render
+  const urlParams         = useMemo(() => new URLSearchParams(window.location.search), []);
+  const urlPaymentState   = urlParams.get('payment');   // 'pending' | 'cancelled' | null
+  const urlPurchaseId     = urlParams.get('purchase_id');
 
   const { user } = useAuth();
   const { balance, loading: balanceLoading, refetch } = useCredits(user?.id);
 
-  const [packages,       setPackages]       = useState<CreditPackage[]>([]);
-  const [purchaseHistory, setPurchaseHistory] = useState<any[]>([]);
-  const [freeCredits,    setFreeCredits]    = useState<string>("...");
+  const [packages,        setPackages]        = useState<CreditPackage[]>([]);
+  const [purchaseHistory,  setPurchaseHistory]  = useState<any[]>([]);
+  const [freeCredits,     setFreeCredits]     = useState<string>("...");
   const [packagesLoading, setPackagesLoading] = useState(true);
-  const [confirmPkg,     setConfirmPkg]     = useState<CreditPackage | null>(null);
-  const [buying,         setBuying]         = useState(false);
+  const [confirmPkg,      setConfirmPkg]      = useState<CreditPackage | null>(null);
+  const [buying,          setBuying]          = useState(false);
+
+  // Payment polling UI state
+  const [pollState,   setPollState]   = useState<PollState>('idle');
+  const pollTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollCountRef  = useRef(0);
+  const MAX_POLLS     = 18;   // 18 × 2 s = 36 s max
+  const POLL_INTERVAL = 2000; // ms
 
   // Transaction history state
   const [historyLoading,   setHistoryLoading]   = useState(true);
@@ -93,25 +106,103 @@ export default function Credits() {
     fetchPurchaseHistory();
   }, []);
 
+  // ── Payment return handler ────────────────────────────────────────────────
+  //
+  // Dodo redirects to the SAME return_url for both success AND failure, so we
+  // NEVER trust a URL param to indicate success. Instead we poll the real
+  // purchase row in the database until it reaches a terminal state.
+  //
   useEffect(() => {
-    if (paymentStatus === 'success') {
-      toast.success('Payment successful! Your credits will appear shortly.', {
-        duration: 8000,
-      });
-      // Clear params from URL without reload
-      const url = new URL(window.location.href);
-      url.searchParams.delete('payment');
-      url.searchParams.delete('pkg');
-      window.history.replaceState({}, '', url.pathname);
-      
-      const timer = setTimeout(() => {
-        refetch();
-        fetchHistory();
-        fetchPurchaseHistory();
-      }, 3000);
-      return () => clearTimeout(timer);
+    // Always clear payment-related params from the URL immediately
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('payment');
+    cleanUrl.searchParams.delete('purchase_id');
+    cleanUrl.searchParams.delete('pkg');   // legacy
+    window.history.replaceState({}, '', cleanUrl.pathname);
+
+    if (urlPaymentState === 'cancelled') {
+      toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
+      return;
     }
-  }, [paymentStatus]);
+
+    if (urlPaymentState === 'pending' && urlPurchaseId) {
+      setPollState('polling');
+      pollCountRef.current = 0;
+      startPolling(urlPurchaseId);
+    }
+
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function startPolling(purchaseId: string) {
+    async function poll() {
+      try {
+        const { data, error } = await supabase
+          .from('package_purchases')
+          .select('payment_status, credits_total')
+          .eq('id', purchaseId)
+          .single();
+
+        if (error) throw error;
+
+        const status = data?.payment_status as string;
+
+        if (status === 'completed') {
+          setPollState('completed');
+          toast.success(
+            `Payment successful! ${(data.credits_total ?? 0).toLocaleString()} credits have been added to your account.`,
+            { duration: 8000 },
+          );
+          refetch();
+          fetchHistory();
+          fetchPurchaseHistory();
+          return;
+        }
+
+        if (status === 'failed') {
+          setPollState('failed');
+          toast.error('Payment failed. Please try again or use a different payment method.', { duration: 8000 });
+          fetchPurchaseHistory();
+          return;
+        }
+
+        if (status === 'cancelled') {
+          setPollState('cancelled');
+          toast.info('Payment was cancelled. No charges were made.', { duration: 6000 });
+          return;
+        }
+
+        // Still pending — keep polling
+        pollCountRef.current += 1;
+        if (pollCountRef.current >= MAX_POLLS) {
+          setPollState('timeout');
+          toast.info(
+            'Your payment is still being confirmed. Credits will appear in your account shortly — no action needed.',
+            { duration: 12000 },
+          );
+          refetch();
+          fetchPurchaseHistory();
+          return;
+        }
+
+        pollTimerRef.current = setTimeout(poll, POLL_INTERVAL);
+      } catch {
+        // Network error — retry silently
+        pollCountRef.current += 1;
+        if (pollCountRef.current < MAX_POLLS) {
+          pollTimerRef.current = setTimeout(poll, POLL_INTERVAL);
+        } else {
+          setPollState('timeout');
+        }
+      }
+    }
+
+    // Give Dodo's webhook a 2-second head-start before the first poll
+    pollTimerRef.current = setTimeout(poll, 2000);
+  }
 
   const fetchFreeCredits = async () => {
     try {
@@ -268,6 +359,51 @@ export default function Credits() {
         <h2 className="text-3xl font-display font-bold text-foreground">Credit Balance</h2>
         <p className="text-muted-foreground mt-1">Manage your credits and view transaction history.</p>
       </div>
+
+      {/* Payment Status Banner */}
+      {pollState === 'polling' && (
+        <div className="flex items-center gap-3 bg-primary/10 border border-primary/20 text-primary rounded-xl px-5 py-4 mb-6">
+          <Loader2 className="w-5 h-5 animate-spin flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">Confirming your payment…</p>
+            <p className="text-xs text-primary/70 mt-0.5">This usually takes a few seconds. Please don't close this page.</p>
+          </div>
+        </div>
+      )}
+
+      {pollState === 'completed' && (
+        <div className="flex items-center gap-3 bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 rounded-xl px-5 py-4 mb-6">
+          <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+          <p className="font-semibold text-sm">Payment confirmed! Your credits have been added.</p>
+        </div>
+      )}
+
+      {pollState === 'failed' && (
+        <div className="flex items-center gap-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-xl px-5 py-4 mb-6">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">Payment failed</p>
+            <p className="text-xs opacity-80 mt-0.5">No charges were made. Please try again or use a different payment method.</p>
+          </div>
+        </div>
+      )}
+
+      {pollState === 'cancelled' && (
+        <div className="flex items-center gap-3 bg-muted border border-border text-muted-foreground rounded-xl px-5 py-4 mb-6">
+          <X className="w-5 h-5 flex-shrink-0" />
+          <p className="font-semibold text-sm">Payment cancelled. No charges were made.</p>
+        </div>
+      )}
+
+      {pollState === 'timeout' && (
+        <div className="flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 rounded-xl px-5 py-4 mb-6">
+          <Clock className="w-5 h-5 flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">Payment is still being processed</p>
+            <p className="text-xs opacity-80 mt-0.5">Your credits will appear automatically once the payment clears. Check back in a moment.</p>
+          </div>
+        </div>
+      )}
 
       {/* Balance Card */}
       <div className="bg-gradient-to-br from-card to-secondary border border-border rounded-2xl p-6 sm:p-8 shadow-sm mb-10 relative overflow-hidden">
