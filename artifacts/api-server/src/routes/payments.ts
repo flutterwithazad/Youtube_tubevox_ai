@@ -116,8 +116,11 @@ router.post('/checkout', async (req, res) => {
     });
 
   } catch (err: any) {
-    console.error('[DODO] Checkout error:', err.message);
-    return res.status(500).json({ error: 'Failed to create checkout session' });
+    console.error('[DODO] Checkout error:', err.stack || err.message);
+    return res.status(500).json({ 
+      error: 'Failed to create checkout session',
+      details: err.message 
+    });
   }
 });
 

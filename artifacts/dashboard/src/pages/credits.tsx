@@ -234,7 +234,7 @@ export default function Credits() {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error ?? 'Failed to start checkout');
+        toast.error(data.details || data.error || 'Failed to start checkout');
         return;
       }
 
