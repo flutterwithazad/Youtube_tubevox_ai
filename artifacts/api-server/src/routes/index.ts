@@ -17,12 +17,15 @@ import adminAuditLogRouter from "./admin/audit-log.js";
 import adminAdminsRouter from "./admin/admins.js";
 import adminSocialLinksRouter from "./admin/social-links.js";
 import adminContactSubmissionsRouter from "./admin/contact-submissions.js";
+import commentsRouter from "./comments.js";
+import paymentsRouter from "./payments.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/public", publicRouter);
 router.use("/credits", creditsRouter);
+router.use("/payments", paymentsRouter);
 router.use("/admin/auth", adminAuthRouter);
 router.use("/admin/stats", adminStatsRouter);
 router.use("/admin/users", adminUsersRouter);
@@ -38,5 +41,6 @@ router.use("/admin/audit-log", adminAuditLogRouter);
 router.use("/admin/admins", adminAdminsRouter);
 router.use("/admin/social-links", adminSocialLinksRouter);
 router.use("/admin/contact-submissions", adminContactSubmissionsRouter);
+router.use("/comments", commentsRouter);
 
 export default router;

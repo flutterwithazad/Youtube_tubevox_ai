@@ -1,3 +1,4 @@
+import { useLocation } from "wouter";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Zap, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -18,6 +19,7 @@ interface CreditPackage {
   sort_order?: number;
   is_popular?: boolean;
   stripe_price_id?: string;
+  dodo_product_id?: string;
 }
 
 interface LedgerRow {
@@ -51,10 +53,15 @@ const JOBS_PER_PAGE = 10;
 const CREDITS_PER_PAGE = 10;
 
 export default function Credits() {
+  const [location] = useLocation();
+  const searchParams = new URLSearchParams(window.location.search);
+  const paymentStatus = searchParams.get('payment');
+
   const { user } = useAuth();
   const { balance, loading: balanceLoading, refetch } = useCredits(user?.id);
 
   const [packages,       setPackages]       = useState<CreditPackage[]>([]);
+  const [purchaseHistory, setPurchaseHistory] = useState<any[]>([]);
   const [freeCredits,    setFreeCredits]    = useState<string>("...");
   const [packagesLoading, setPackagesLoading] = useState(true);
   const [confirmPkg,     setConfirmPkg]     = useState<CreditPackage | null>(null);
@@ -83,7 +90,28 @@ export default function Credits() {
     fetchPackages();
     fetchHistory();
     fetchFreeCredits();
+    fetchPurchaseHistory();
   }, []);
+
+  useEffect(() => {
+    if (paymentStatus === 'success') {
+      toast.success('Payment successful! Your credits will appear shortly.', {
+        duration: 8000,
+      });
+      // Clear params from URL without reload
+      const url = new URL(window.location.href);
+      url.searchParams.delete('payment');
+      url.searchParams.delete('pkg');
+      window.history.replaceState({}, '', url.pathname);
+      
+      const timer = setTimeout(() => {
+        refetch();
+        fetchHistory();
+        fetchPurchaseHistory();
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [paymentStatus]);
 
   const fetchFreeCredits = async () => {
     try {
@@ -165,36 +193,57 @@ export default function Credits() {
     }
   };
 
+  const fetchPurchaseHistory = async () => {
+    try {
+      const { data } = await supabase
+        .from('package_purchases')
+        .select('*, credit_packages (name, credits_amount)')
+        .order('created_at', { ascending: false })
+        .limit(10);
+      setPurchaseHistory(data || []);
+    } catch (e) {
+      console.error("fetchPurchaseHistory:", e);
+    }
+  };
+
   const handleBuy = (pkg: CreditPackage) => {
     setConfirmPkg(pkg);
   };
 
   const handleConfirmBuy = async () => {
     if (!confirmPkg || !user) return;
+    
+    if (!confirmPkg.dodo_product_id) {
+      toast.error('This package is not configured for payments yet.');
+      return;
+    }
+
     setBuying(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { toast.error("Not authenticated"); return; }
 
-      const res = await fetch('/api/credits/purchase', {
+      const res = await fetch('/api/payments/checkout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ package_id: confirmPkg.id }),
+        body: JSON.stringify({ packageId: confirmPkg.id }),
       });
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error ?? 'Purchase failed. Please try again.');
+        toast.error(data.details || data.error || 'Failed to start checkout');
         return;
       }
 
-      setConfirmPkg(null);
-      toast.success(`${confirmPkg.credits_amount.toLocaleString()} credits added to your account!`, { duration: 5000 });
-      refetch();
-      fetchHistory();
+      if (data.mode === 'test') {
+        toast.info('🧪 Test mode payment — no real money charged');
+      }
+
+      // Redirect to Dodo hosted checkout
+      window.location.href = data.checkout_url;
     } catch {
       toast.error('Something went wrong. Please try again.');
     } finally {
@@ -305,9 +354,9 @@ export default function Credits() {
                       isPopular
                         ? "bg-primary hover:bg-primary/90 text-white shadow-md shadow-primary/25 hover:-translate-y-0.5"
                         : "bg-secondary hover:bg-secondary/80 text-foreground border border-border"
-                    }`}
+                    } ${!pkg.dodo_product_id ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
-                    Buy Now
+                    {pkg.dodo_product_id ? 'Buy Now' : 'Coming Soon'}
                   </button>
                 </div>
               );
@@ -417,82 +466,64 @@ export default function Credits() {
         </div>
 
         {/* Section 2: Credits received */}
+        {/* Section 3: Purchase History */}
         <div>
-          <h3 className="text-xl font-display font-bold text-foreground mb-4">Credits Received</h3>
+          <h3 className="text-xl font-display font-bold text-foreground mb-4">Purchase History</h3>
           <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-secondary/50 text-muted-foreground uppercase text-xs font-semibold">
-                <tr>
-                  <th className="px-6 py-3">Date</th>
-                  <th className="px-6 py-3">Description</th>
-                  <th className="px-6 py-3 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50">
-                {historyLoading ? (
-                  Array.from({ length: 3 }).map((_, i) => (
-                    <tr key={i}>
-                      <td className="px-6 py-4"><Skeleton className="h-4 w-28" /></td>
-                      <td className="px-6 py-4"><Skeleton className="h-4 w-40" /></td>
-                      <td className="px-6 py-4 text-right"><Skeleton className="h-4 w-16 ml-auto" /></td>
-                    </tr>
-                  ))
-                ) : creditRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="px-6 py-10 text-center text-muted-foreground text-sm">
-                      No credits received yet.
-                    </td>
-                  </tr>
-                ) : (
-                  paginatedCredits.map((tx) => (
-                    <tr key={tx.id} className="hover:bg-secondary/30 transition-colors">
-                      <td className="px-6 py-4 text-xs text-muted-foreground whitespace-nowrap">
-                        {formatDistanceToNow(new Date(tx.created_at), { addSuffix: true })}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-1.5 rounded-md bg-green-100 text-green-600">
-                            <ArrowDownRight className="w-3 h-3" />
-                          </div>
-                          <span className="font-medium text-foreground text-sm">
-                            {creditLabel(tx.source_type, tx.description)}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right font-mono font-bold text-green-600">
-                        +{tx.amount.toLocaleString()}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-
-            {/* Credits Received Pagination */}
-            {!historyLoading && totalCreditPages > 1 && (
-              <div className="flex items-center justify-between px-6 py-3 border-t border-border/50 bg-secondary/20">
-                <span className="text-xs text-muted-foreground">
-                  Showing {creditsPage * CREDITS_PER_PAGE + 1}–
-                  {Math.min((creditsPage + 1) * CREDITS_PER_PAGE, creditRows.length)} of{" "}
-                  {creditRows.length}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setCreditsPage(p => Math.max(0, p - 1))}
-                    disabled={creditsPage === 0}
-                    className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg disabled:opacity-40 hover:bg-secondary transition-colors"
-                  >
-                    ← Previous
-                  </button>
-                  <button
-                    onClick={() => setCreditsPage(p => Math.min(totalCreditPages - 1, p + 1))}
-                    disabled={creditsPage === totalCreditPages - 1}
-                    className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg disabled:opacity-40 hover:bg-secondary transition-colors"
-                  >
-                    Next →
-                  </button>
+            {historyLoading ? (
+              Array.from({ length: 2 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between p-4 border-b border-border/50">
+                   <div className="flex items-center gap-3">
+                     <Skeleton className="w-8 h-8 rounded-xl" />
+                     <div className="space-y-1">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-3 w-24" />
+                     </div>
+                   </div>
+                   <div className="text-right space-y-1">
+                     <Skeleton className="h-4 w-20 ml-auto" />
+                     <Skeleton className="h-3 w-12 ml-auto" />
+                   </div>
                 </div>
-              </div>
+              ))
+            ) : purchaseHistory.length === 0 ? (
+               <div className="px-6 py-10 text-center text-muted-foreground text-sm">
+                 No purchases yet.
+               </div>
+            ) : (
+              purchaseHistory.map(p => (
+                <div key={p.id} className="flex items-center justify-between p-4 border-b border-border/50 last:border-0 hover:bg-secondary/30 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      p.payment_status === 'completed' ? 'bg-green-100 text-green-600' :
+                      p.payment_status === 'failed'    ? 'bg-red-100 text-red-600'   : 'bg-amber-100 text-amber-600'
+                    }`}>
+                      {p.payment_status === 'completed' ? (
+                        <CheckCircle2 className="w-4 h-4" />
+                      ) : p.payment_status === 'failed' ? (
+                        <X className="w-4 h-4" />
+                      ) : (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{p.credit_packages?.name}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {formatDistanceToNow(new Date(p.created_at), { addSuffix: true })}
+                        {p.dodo_payment_id && (
+                          <span className="ml-2 font-mono">#{p.dodo_payment_id.slice(-8)}</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-semibold font-mono text-foreground">
+                      +{p.credits_total?.toLocaleString()} credits
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">${p.price_paid} {p.currency}</p>
+                  </div>
+                </div>
+              ))
             )}
           </div>
         </div>

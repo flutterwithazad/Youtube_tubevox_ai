@@ -15,10 +15,20 @@ export default function AuthCallback() {
     const handleCallback = async () => {
       const params = new URLSearchParams(window.location.search);
       const code = params.get("code");
+      const errorParam = params.get("error");
+      const errorDesc = params.get("error_description");
+
+      if (errorParam || errorDesc) {
+        console.error("[AuthCallback] URL Error:", errorParam, errorDesc);
+        toast.error(errorDesc || errorParam || "Authentication failed");
+        setLocation("/login");
+        return;
+      }
 
       if (code) {
         const { error } = await supabase.auth.exchangeCodeForSession(code);
         if (error) {
+          console.error("[AuthCallback] Exchange error:", error.message);
           toast.error("Authentication failed. Please try again.");
           setLocation("/login");
           return;

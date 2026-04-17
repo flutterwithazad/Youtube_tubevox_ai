@@ -1,0 +1,54 @@
+#!/usr/bin/expect -f
+
+set timeout 300
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+send "cd /var/www/Youtube_tubevox_ai\r"
+expect -re {[#$] }
+
+# Install dependencies (skip frozen lockfile since node_modules might be partial)
+puts "\n📦 Installing all workspace dependencies...\n"
+send "pnpm install --no-frozen-lockfile 2>&1 | tail -5\r"
+expect -timeout 120 -re {[#$] }
+
+# Now build landing
+puts "\n🔨 Building landing page...\n"
+send "PORT=3002 pnpm --filter @workspace/tubevox-landing build 2>&1 | tail -15\r"
+expect -timeout 180 -re {[#$] }
+
+# Build dashboard  
+puts "\n🔨 Building dashboard...\n"
+send "PORT=3000 BASE_PATH=/dashboard/ pnpm --filter @workspace/dashboard build 2>&1 | tail -10\r"
+expect -timeout 180 -re {[#$] }
+
+# Check dist folders
+send "echo 'Landing dist:' && ls artifacts/tubevox-landing/dist/ 2>/dev/null | head -5 || echo 'MISSING'\r"
+expect -timeout 10 -re {[#$] }
+
+send "echo 'Dashboard dist:' && ls artifacts/dashboard/dist/ 2>/dev/null | head -5 || echo 'MISSING'\r"
+expect -timeout 10 -re {[#$] }
+
+# Restart all services
+puts "\n♻️ Restarting services...\n"
+send "pm2 restart all && sleep 3\r"
+expect -timeout 30 -re {[#$] }
+
+# Test all endpoints
+send "curl -s -o /dev/null -w 'Dashboard: %{http_code}\n' http://localhost:3000 && curl -s -o /dev/null -w 'Landing: %{http_code}\n' http://localhost:3002 && curl -s -o /dev/null -w 'API: %{http_code}\n' http://localhost:8080/api/public/settings\r"
+expect -timeout 30 -re {[#$] }
+
+send "pm2 list\r"
+expect -timeout 15 -re {[#$] }
+
+send "exit\r"
+expect eof

@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/admin/ConfirmDialog';
 
-const defaultForm = { name: '', description: '', credits_amount: 0, price: 0, currency: 'USD', stripe_price_id: '', razorpay_plan_id: '', sort_order: 0, is_active: true };
+const defaultForm = { name: '', description: '', credits_amount: 0, price: 0, currency: 'USD', dodo_product_id: '', stripe_price_id: '', sort_order: 0, is_active: true };
 
 export default function PackagesPage() {
   const [packages, setPackages] = useState<any[]>([]);
@@ -88,8 +88,8 @@ export default function PackagesPage() {
               <F label="Price" k="price" type="number" />
               <F label="Currency" k="currency" />
               <F label="Sort Order" k="sort_order" type="number" />
+              <F label="Dodo Product ID" k="dodo_product_id" />
               <F label="Stripe Price ID" k="stripe_price_id" />
-              <F label="Razorpay Plan ID" k="razorpay_plan_id" />
               <div className="col-span-2"><label className="block text-xs font-medium text-gray-700 mb-1">Description</label><input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none" /></div>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} /> Active</label>
             </div>

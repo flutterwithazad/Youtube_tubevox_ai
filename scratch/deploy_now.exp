@@ -1,0 +1,54 @@
+#!/usr/bin/expect -f
+
+set timeout 300
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+puts "\n🚀 Starting TubeVox VPS Deployment...\n"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" {
+        send "$password\r"
+    }
+    "yes/no" {
+        send "yes\r"
+        expect "password:"
+        send "$password\r"
+    }
+}
+
+# Wait for shell prompt
+expect {
+    "# " { }
+    "$ " { }
+    timeout { puts "Connection timeout"; exit 1 }
+}
+
+puts "\n📥 Pulling latest code from main...\n"
+send "cd /var/www/Youtube_tubevox_ai && git reset --hard && git pull origin main\r"
+expect {
+    "Already up to date" { puts "✅ Already up to date" }
+    "Fast-forward" { puts "✅ Code updated" }
+    "error:" { puts "❌ Git error"; exit 1 }
+    timeout { puts "Git pull timeout" }
+}
+expect "# "
+
+puts "\n📦 Installing dependencies...\n"
+send "cd /var/www/Youtube_tubevox_ai && pnpm install --frozen-lockfile 2>&1 | tail -5\r"
+expect -timeout 120 "# "
+
+puts "\n♻️ Restarting all PM2 services...\n"
+send "pm2 restart all && sleep 3 && pm2 list\r"
+expect -timeout 60 "# "
+
+puts "\n🔍 Verifying services...\n"
+send "curl -s -o /dev/null -w 'Dashboard (3000): %{http_code}\n' http://localhost:3000 && curl -s -o /dev/null -w 'API (8080): %{http_code}\n' http://localhost:8080/api/public/settings && curl -s -o /dev/null -w 'Landing (3002): %{http_code}\n' http://localhost:3002\r"
+expect -timeout 30 "# "
+
+puts "\n✅ Deployment complete!\n"
+send "exit\r"
+expect eof

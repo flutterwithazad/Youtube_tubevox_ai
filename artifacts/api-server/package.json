@@ -16,10 +16,12 @@
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
+    "dodopayments": "^2.28.0",
     "drizzle-orm": "catalog:",
     "express": "^5",
     "jsonwebtoken": "^9.0.3",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "standardwebhooks": "^1.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",

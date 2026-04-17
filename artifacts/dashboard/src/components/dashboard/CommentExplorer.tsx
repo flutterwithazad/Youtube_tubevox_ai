@@ -246,29 +246,42 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
       setLoading(true);
       setComments([]);
       setRenderLimit(RENDER_PAGE);
-      const all: any[] = [];
-      const seen = new Set<string>();
-      let from = 0;
+      
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      // In the new architecture, we might still want to fetch in batches 
+      // if the results are very large, but the API /api/comments 
+      // can handle larger batches than PostgREST.
+      let all: any[] = [];
+      let offset = 0;
       const BATCH = 1000;
+      
       while (true) {
-        const { data, error } = await supabase
-          .from("comments")
-          .select("*")
-          .eq("job_id", jobId)
-          .order("likes", { ascending: false })
-          .range(from, from + BATCH - 1);
-        if (error) throw error;
-        if (!data || data.length === 0) break;
-        for (const c of data) {
-          const key = c.comment_id || c.id;
-          if (!seen.has(key)) { seen.add(key); all.push(c); }
+        const res = await fetch(`/api/comments?jobId=${jobId}&offset=${offset}&limit=${BATCH}&orderBy=${sortCol}`, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        });
+        
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Fetch failed' }));
+          throw new Error(err.error || `Failed to fetch comments: ${res.status}`);
         }
-        if (data.length < BATCH) break;
-        from += BATCH;
+        
+        const data = await res.json();
+        const batch = data.comments ?? [];
+        all = [...all, ...batch];
+        
+        if (batch.length < BATCH) break;
+        offset += BATCH;
+        
+        // Safety break to prevent infinite loops if total is massive
+        if (all.length > 50000) break;
       }
+      
       setComments(all);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      toast.error(e.message || "Failed to load comments");
     } finally {
       setLoading(false);
     }

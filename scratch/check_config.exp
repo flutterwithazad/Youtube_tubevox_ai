@@ -1,0 +1,29 @@
+#!/usr/bin/expect -f
+
+set timeout 120
+set password "g9T3X88orBfsUV"
+set host "173.249.9.155"
+set user "root"
+
+spawn ssh -o StrictHostKeyChecking=no $user@$host
+
+expect {
+    "password:" { send "$password\r" }
+    "yes/no"   { send "yes\r"; expect "password:"; send "$password\r" }
+}
+expect -re {[#$] }
+
+# Check ecosystem config
+send "cat /var/www/Youtube_tubevox_ai/ecosystem.config.js 2>/dev/null || cat /var/www/Youtube_tubevox_ai/ecosystem.config.cjs 2>/dev/null\r"
+expect -timeout 15 -re {[#$] }
+
+# Check what's in tubevox-landing
+send "ls /var/www/Youtube_tubevox_ai/artifacts/tubevox-landing/ 2>/dev/null | head -20\r"
+expect -timeout 10 -re {[#$] }
+
+# Check if dist exists for landing
+send "ls /var/www/Youtube_tubevox_ai/artifacts/tubevox-landing/dist/ 2>/dev/null | head -10 || echo 'NO DIST FOUND'\r"
+expect -timeout 10 -re {[#$] }
+
+send "exit\r"
+expect eof

@@ -6,6 +6,7 @@ import { AlertTriangle } from 'lucide-react';
 
 const TOGGLE_KEYS = ['maintenance_mode', 'new_signups_enabled', 'email_signin_enabled'];
 const NUMBER_KEYS  = ['max_job_comments', 'free_plan_credits', 'credit_cost_per_1000'];
+const SENSITIVE_KEYS = ['dodo_test_api_key', 'dodo_live_api_key', 'dodo_test_webhook_secret', 'dodo_live_webhook_secret'];
 
 const FRIENDLY: Record<string, { label: string; description: string }> = {
   maintenance_mode: {
@@ -23,6 +24,26 @@ const FRIENDLY: Record<string, { label: string; description: string }> = {
   free_plan_credits: {
     label: 'Signup Bonus (free_plan_credits)',
     description: 'Credits granted to every new user on signup. Appears on the landing page, pricing, FAQ, and signup page automatically.',
+  },
+  payment_mode: {
+    label: 'Payment Mode',
+    description: 'Switch between "test" and "live" modes for Dodo Payments.',
+  },
+  dodo_test_api_key: {
+    label: 'Dodo Test API Key',
+    description: 'Your Dodo Payments test mode api key (test_...)',
+  },
+  dodo_live_api_key: {
+    label: 'Dodo Live API Key',
+    description: 'Your Dodo Payments live mode api key (live_...)',
+  },
+  dodo_test_webhook_secret: {
+    label: 'Dodo Test Webhook Secret',
+    description: 'Your Dodo webhook secret key for test mode (whsec_...)',
+  },
+  dodo_live_webhook_secret: {
+    label: 'Dodo Live Webhook Secret',
+    description: 'Your Dodo webhook secret key for live mode (whsec_...)',
   },
 };
 
@@ -96,6 +117,7 @@ export default function SettingsPage() {
           const friendly = FRIENDLY[s.key];
           const isToggle = TOGGLE_KEYS.includes(s.key);
           const isNumber = NUMBER_KEYS.includes(s.key);
+          const isSensitive = SENSITIVE_KEYS.includes(s.key);
           const isSaving = saving === s.key;
 
           if (isToggle) {
@@ -144,6 +166,36 @@ export default function SettingsPage() {
                         isOn ? 'translate-x-5' : 'translate-x-0.5'
                       }`}
                     />
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          if (s.key === 'payment_mode') {
+            const isLive = values[s.key] === 'live';
+            return (
+              <div key={s.key} className={`rounded-xl border-2 p-5 ${isLive ? 'border-red-400 bg-red-50' : 'border-green-300 bg-green-50'}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-3 mb-1">
+                      <div className={`w-3 h-3 rounded-full ${isLive ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+                      <h3 className="text-sm font-bold text-gray-900">
+                        Payment Mode: {isLive ? 'LIVE' : 'TEST'}
+                      </h3>
+                    </div>
+                    <p className="text-xs text-gray-600">
+                      {isLive 
+                        ? '⚠ Real payments are active. Users will be charged real money.' 
+                        : '✅ Test mode. No real money charged. Use Dodo test cards.'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => saveValue('payment_mode', isLive ? 'test' : 'live')}
+                    disabled={isSaving}
+                    className={`px-4 py-2 rounded-lg font-semibold text-xs transition-all ${isLive ? 'bg-gray-900 text-white' : 'bg-red-600 text-white'}`}
+                  >
+                    {isSaving ? 'Switching...' : (isLive ? '→ Switch to Test' : '→ Switch to Live')}
                   </button>
                 </div>
               </div>
@@ -210,6 +262,7 @@ export default function SettingsPage() {
                     />
                   ) : (
                     <input
+                      type={isSensitive ? "password" : "text"}
                       value={values[s.key] ?? ''}
                       onChange={e => setValues(v => ({ ...v, [s.key]: e.target.value }))}
                       className="border border-gray-200 rounded-lg px-2 py-1 text-sm w-48 focus:ring-1 focus:ring-indigo-500 outline-none"

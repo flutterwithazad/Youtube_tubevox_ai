@@ -26,7 +26,7 @@ router.get('/packages', async (req, res) => {
     const supabase = createSupabaseAdmin();
     const { data, error } = await supabase
       .from('credit_packages')
-      .select('id,name,description,credits_amount,price,currency,sort_order')
+      .select('id,name,description,credits_amount,price,currency,sort_order,dodo_product_id,stripe_price_id')
       .eq('is_active', true)
       .order('sort_order');
     if (error) throw error;
