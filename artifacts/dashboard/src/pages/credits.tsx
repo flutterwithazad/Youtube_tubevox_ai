@@ -123,6 +123,11 @@ export default function Credits() {
 
     if (urlDodoCancel === 'true' || urlDodoStatus === 'cancelled') {
       toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
+      // If we have the purchase ID, explicitly tell the backend to cancel it 
+      // so it stops showing as "pending" in the UI.
+      if (urlPurchaseId) {
+        api.post('/payments/cancel', { purchase_id: urlPurchaseId }).catch(() => {});
+      }
       return;
     }
 

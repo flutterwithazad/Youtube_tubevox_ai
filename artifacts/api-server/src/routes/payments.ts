@@ -101,7 +101,7 @@ router.post('/checkout', async (req, res) => {
     const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
     // Dodo appends ?status=... and ?payment_id=... to the return_url automatically.
     const returnUrl = `${appUrl}/dashboard/credits?purchase_id=${purchase.id}`;
-    const cancelUrl = `${appUrl}/dashboard/credits?dodo_cancel=true`;
+    const cancelUrl = `${appUrl}/dashboard/credits?dodo_cancel=true&purchase_id=${purchase.id}`;
 
     // ── 5. Create Dodo checkout session ───────────────────────────────────────
     const dodo = await getDodoClient();
@@ -176,6 +176,31 @@ router.get('/purchase/:id/status', async (req, res) => {
   } catch (err: any) {
     console.error('[DODO] Status check error:', err.message);
     return res.status(500).json({ error: 'Failed to get purchase status' });
+  }
+});
+
+router.post('/cancel', async (req: any, res) => {
+  const { purchase_id } = req.body;
+  const userId = req.user?.id;
+
+  if (!purchase_id) return res.status(400).json({ error: 'Missing purchase_id' });
+
+  try {
+    const supabase = createSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('package_purchases')
+      .update({ payment_status: 'cancelled' })
+      .eq('id', purchase_id)
+      .eq('user_id', userId)
+      .eq('payment_status', 'pending')
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error('[CANCEL ERROR]', err.message);
+    res.status(500).json({ error: 'Failed to cancel purchase' });
   }
 });
 
