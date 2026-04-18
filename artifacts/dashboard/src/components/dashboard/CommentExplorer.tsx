@@ -244,18 +244,16 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
   const loadAll = async () => {
     try {
       setLoading(true);
-      setComments([]);
+      setComments([]); // Start fresh
       setRenderLimit(RENDER_PAGE);
       
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      // In the new architecture, we might still want to fetch in batches 
-      // if the results are very large, but the API /api/comments 
-      // can handle larger batches than PostgREST.
       let all: any[] = [];
       let offset = 0;
       const BATCH = 1000;
+      let firstBatch = true;
       
       while (true) {
         const res = await fetch(`/api/comments?jobId=${jobId}&offset=${offset}&limit=${BATCH}&orderBy=${sortCol}`, {
@@ -271,19 +269,30 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
         const batch = data.comments ?? [];
         all = [...all, ...batch];
         
+        // Progressive update: Show first batch immediately to kill the skeleton loader
+        if (firstBatch) {
+          setComments([...all]);
+          setLoading(false);
+          firstBatch = false;
+        } else {
+          // Update in background for remaining batches
+          setComments([...all]);
+        }
+        
         if (batch.length < BATCH) break;
         offset += BATCH;
         
-        // Safety break to prevent infinite loops if total is massive
+        // Safety break for extreme cases
         if (all.length > 50000) break;
+        
+        // Small delay to let UI breathe between big batches
+        await new Promise(r => setTimeout(r, 100));
       }
-      
-      setComments(all);
     } catch (e: any) {
       console.error(e);
       toast.error(e.message || "Failed to load comments");
     } finally {
-      setLoading(false);
+      setLoading(false); // Ensure loader stops even on failure
     }
   };
 

@@ -208,16 +208,30 @@ router.get('/:id/jobs', async (req, res) => {
   }
 });
 
-// User payments
+// User payments with pagination
 router.get('/:id/payments', async (req, res) => {
   try {
     requireAdmin(req);
     const supabase = createSupabaseAdmin();
-    const [purchases, transactions] = await Promise.all([
-      supabase.from('package_purchases').select('*,credit_packages(name)').eq('user_id', req.params.id).order('created_at', { ascending: false }).limit(50),
-      supabase.from('payment_transactions').select('*').eq('user_id', req.params.id).order('created_at', { ascending: false }).limit(50)
+    const userId = req.params.id;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = 20;
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+
+    const [purchasesRes, transactionsRes] = await Promise.all([
+      supabase.from('package_purchases').select('*,credit_packages(name)', { count: 'exact' }).eq('user_id', userId).order('created_at', { ascending: false }).range(from, to),
+      supabase.from('payment_transactions').select('*', { count: 'exact' }).eq('user_id', userId).order('created_at', { ascending: false }).range(from, to)
     ]);
-    return res.json({ purchases: purchases.data, transactions: transactions.data });
+
+    return res.json({ 
+      purchases: purchasesRes.data, 
+      purchasesCount: purchasesRes.count,
+      transactions: transactionsRes.data,
+      transactionsCount: transactionsRes.count,
+      page,
+      limit
+    });
   } catch (e: any) {
     return res.status(500).json({ error: e.message });
   }

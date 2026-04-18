@@ -20,6 +20,7 @@ export default function UserDetailPage() {
   const [payments, setPayments] = useState<any>(null);
   const [spentByJob, setSpentByJob] = useState<any[]>([]);
   const [received, setReceived] = useState<any[]>([]);
+  const [paymentsPage, setPaymentsPage] = useState(1);
   const [spentPage, setSpentPage] = useState(0);
   const [receivedPage, setReceivedPage] = useState(0);
   const CREDITS_PER_PAGE = 10;
@@ -37,7 +38,7 @@ export default function UserDetailPage() {
 
   useEffect(() => {
     if (tab === 'jobs') api.get(`/admin/users/${id}/jobs?page=${jobsPage}`).then(d => { setJobs(d.data ?? []); setJobsCount(d.count ?? 0); });
-    if (tab === 'payments') api.get(`/admin/users/${id}/payments`).then(setPayments);
+    if (tab === 'payments') api.get(`/admin/users/${id}/payments?page=${paymentsPage}`).then(setPayments);
     if (tab === 'credits') api.get(`/admin/users/${id}/credits`).then(d => { setSpentByJob(d.spentByJob ?? []); setReceived(d.received ?? []); setSpentPage(0); setReceivedPage(0); });
     if (tab === 'security') api.get(`/admin/users/${id}/sessions`).then(setSessions);
     if (tab === 'notifications') api.get(`/admin/users/${id}/notifications`).then(d => setNotifications(d.data ?? []));
@@ -237,8 +238,34 @@ export default function UserDetailPage() {
                     </div>
                   </div>
                 ))}
-                {(payments.purchases ?? []).length === 0 && (
+                {(!payments.purchases || payments.purchases.length === 0) && (
                   <p className="text-sm text-gray-400 py-8 text-center bg-gray-50 rounded-xl border border-dashed">No purchase history found.</p>
+                )}
+
+                {/* Pagination Controls */}
+                {payments.purchasesCount > 20 && (
+                  <div className="flex items-center justify-between pt-4 border-t border-gray-100 mt-4">
+                    <p className="text-[10px] text-gray-400">
+                      {(payments.page - 1) * 20 + 1}–{Math.min(payments.page * 20, payments.purchasesCount)} of {payments.purchasesCount.toLocaleString()}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        disabled={payments.page <= 1}
+                        onClick={() => setPaymentsPage(p => p - 1)}
+                        className="text-[10px] px-2 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                      >
+                        ← Prev
+                      </button>
+                      <span className="text-[10px] text-gray-500 font-medium">Page {payments.page}</span>
+                      <button
+                        disabled={payments.page >= Math.ceil(payments.purchasesCount / 20)}
+                        onClick={() => setPaymentsPage(p => p + 1)}
+                        className="text-[10px] px-2 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
