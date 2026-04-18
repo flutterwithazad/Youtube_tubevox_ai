@@ -8,7 +8,7 @@ import { useCredits } from "@/hooks/use-credits";
 import { supabase } from "@/lib/supabase";
 import { formatDistanceToNow } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api } from "@/lib/api";
+
 
 interface CreditPackage {
   id: string;
@@ -124,7 +124,12 @@ export default function Credits() {
     if (dodoCancel || dodoStatus === 'cancelled') {
       toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
       if (purchaseId) {
-        api.post('/payments/cancel', { purchase_id: purchaseId }).catch(() => {});
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          fetch('/api/payments/purchase/' + purchaseId + '/cancel', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
+          }).catch(() => {});
+        });
       }
     } else if (dodoStatus === 'failed') {
       setPollState('failed');
