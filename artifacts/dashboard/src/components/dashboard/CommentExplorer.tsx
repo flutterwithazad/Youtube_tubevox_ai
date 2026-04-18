@@ -74,6 +74,21 @@ function uid() {
 
 const RENDER_PAGE = 300;
 
+// ── Highlighting Helper ───────────────────────────────────────────────────
+const Highlight = ({ text, query }: { text: string; query: string }) => {
+  if (!query || !text) return <>{text}</>;
+  const parts = text.split(new RegExp(`(${query.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) => 
+        part.toLowerCase() === query.toLowerCase() 
+          ? <mark key={i} className="bg-yellow-200 text-yellow-900 rounded-px px-0.5">{part}</mark>
+          : part
+      )}
+    </>
+  );
+};
+
 // ── GreenCheck ──────────────────────────────────────────────────────────────
 
 const GreenCheck = () => (
@@ -185,10 +200,11 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
     let result = [...comments];
 
     // 1. Search
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
       result = result.filter(c =>
-        c.text?.toLowerCase().includes(q) || c.author?.toLowerCase().includes(q)
+        (c.text || "").toLowerCase().includes(q) || 
+        (c.author || "").toLowerCase().includes(q)
       );
     }
 
@@ -851,13 +867,17 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
                                 >
                                   {initials}
                                 </div>
-                                <span className="text-sm text-foreground truncate">{c.author}</span>
+                                <span className="text-sm text-foreground truncate">
+                                  <Highlight text={c.author} query={searchQuery} />
+                                </span>
                               </div>
                             );
                           case "comment":
                             return (
                               <div key="comment" className="text-sm text-foreground leading-relaxed">
-                                <p className="whitespace-pre-wrap break-words">{c.text}</p>
+                                <p className="whitespace-pre-wrap break-words">
+                                  <Highlight text={c.text} query={searchQuery} />
+                                </p>
                               </div>
                             );
                           case "likes":
