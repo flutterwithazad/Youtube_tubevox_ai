@@ -80,7 +80,11 @@ const Highlight = ({ text, query }: { text: string; query: string }) => {
   if (!trimmedQuery || !text) return <>{text}</>;
   
   try {
-    const parts = text.split(new RegExp(`(${trimmedQuery.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi'));
+    // Match only whole words (using word boundaries \b)
+    const escaped = trimmedQuery.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const regex = new RegExp(`(\\b${escaped}\\b)`, 'gi');
+    const parts = text.split(regex);
+    
     return (
       <>
         {parts.map((part, i) => 
@@ -208,9 +212,10 @@ export function CommentExplorer({ jobId, videoTitle, videoUrl, totalCount, isPar
     // 1. Search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
+      const escaped = q.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
       result = result.filter(c =>
-        (c.text || "").toLowerCase().includes(q) || 
-        (c.author || "").toLowerCase().includes(q)
+        regex.test(c.text || "") || regex.test(c.author || "")
       );
     }
 
