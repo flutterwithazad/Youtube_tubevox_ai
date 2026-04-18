@@ -59,11 +59,9 @@ type PollState = 'idle' | 'polling' | 'completed' | 'failed' | 'cancelled' | 'ti
 export default function Credits() {
   const [location] = useLocation();
 
-  // Read URL params once on mount — don't re-derive every render
-  const urlParams         = useMemo(() => new URLSearchParams(window.location.search), []);
-  const urlDodoStatus     = urlParams.get('status');      // 'succeeded' | 'failed' | 'cancelled'
-  const urlDodoCancel     = urlParams.get('dodo_cancel'); // our custom cancel flag
-  const urlPurchaseId     = urlParams.get('purchase_id');
+  // URL params are read inside the payment-return useEffect (below).
+  // We intentionally do NOT read them here at render time — the useEffect
+  // reads them, acts on them, then immediately clears them from the URL.
 
   const { user } = useAuth();
   const { balance, loading: balanceLoading, refetch } = useCredits(user?.id);
@@ -110,18 +108,23 @@ export default function Credits() {
 
   // ── Payment return handler ────────────────────────────────────────────────
   //
-  // Dodo redirects to the SAME return_url for both success AND failure, so we
-  // NEVER trust a URL param to indicate success. Instead we poll the real
-  // purchase row in the database until it reaches a terminal state.
+  // Our backend sets an explicit `payment=pending|cancelled` param on the
+  // redirect URLs it passes to Dodo so we always know which path we're on:
+  //   return_url  → payment=pending   (Dodo also appends status=succeeded/failed)
+  //   cancel_url  → payment=cancelled (user clicked "back" / "cancel" at checkout)
+  //
+  // We NEVER trust a URL param alone to confirm success — we poll the real
+  // purchase row and wait for the webhook to flip the status.
   //
   useEffect(() => {
     // 1. Process flags BEFORE clearing URL
     const params = new URLSearchParams(window.location.search);
-    const dodoCancel = params.get('dodo_cancel') === 'true';
-    const dodoStatus = params.get('status');
-    const purchaseId = params.get('purchase_id');
+    const paymentParam = params.get('payment');     // 'pending' | 'cancelled' — set by us
+    const dodoStatus   = params.get('status');      // 'succeeded'|'failed'|etc — appended by Dodo
+    const purchaseId   = params.get('purchase_id'); // our purchase row UUID
 
-    if (dodoCancel || dodoStatus === 'cancelled') {
+    if (paymentParam === 'cancelled') {
+      // User clicked "Cancel payment" on Dodo's checkout page
       setPollState('cancelled');
       toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
       if (purchaseId) {
@@ -135,31 +138,36 @@ export default function Credits() {
           .catch(() => {});
         });
       }
-    } else if (dodoStatus === 'failed') {
-      setPollState('failed');
-      toast.error('Payment failed. Please try again or use a different payment method.');
-      if (purchaseId) {
-        // Mark as failed in DB so history shows ✗ instead of spinning
-        supabase.auth.getSession().then(({ data: { session } }) => {
-          fetch(`/api/payments/purchase/${purchaseId}/fail`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
-          })
-          .then(() => fetchPurchaseHistory())
-          .catch(() => {});
-        });
+    } else if (paymentParam === 'pending') {
+      // Returned from Dodo checkout — check what Dodo says happened
+      if (dodoStatus === 'failed') {
+        // Dodo appended status=failed — payment declined / error at gateway
+        setPollState('failed');
+        toast.error('Payment failed. Please try again or use a different payment method.');
+        if (purchaseId) {
+          // Mark as failed in DB so history shows ✗ instead of spinning
+          supabase.auth.getSession().then(({ data: { session } }) => {
+            fetch(`/api/payments/purchase/${purchaseId}/fail`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
+            })
+            .then(() => fetchPurchaseHistory())
+            .catch(() => {});
+          });
+        }
+      } else if (purchaseId) {
+        // status=succeeded or unknown — poll the DB and wait for webhook
+        setPollState('polling');
+        pollCountRef.current = 0;
+        startPolling(purchaseId);
       }
-    } else if (purchaseId) {
-      setPollState('polling');
-      pollCountRef.current = 0;
-      startPolling(purchaseId);
     }
 
-    // 2. Clear URL safely
+    // 2. Clear URL params so a refresh doesn't re-trigger the logic
     const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('payment');
     cleanUrl.searchParams.delete('status');
     cleanUrl.searchParams.delete('purchase_id');
-    cleanUrl.searchParams.delete('dodo_cancel');
     cleanUrl.searchParams.delete('payment_id');
     window.history.replaceState({}, '', cleanUrl.pathname);
 
@@ -204,6 +212,7 @@ export default function Credits() {
         if (status === 'cancelled') {
           setPollState('cancelled');
           toast.info('Payment was cancelled. No charges were made.', { duration: 6000 });
+          fetchPurchaseHistory();
           return;
         }
 

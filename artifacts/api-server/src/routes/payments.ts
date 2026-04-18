@@ -98,10 +98,13 @@ router.post('/checkout', async (req, res) => {
     // ── 4. Build redirect URLs ────────────────────────────────────────────────
     //    Dodo uses ONE return_url for both success AND failure — we never
     //    hard-code "success". The frontend checks the real DB status instead.
-    const appUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-    // Dodo appends ?status=... and ?payment_id=... to the return_url automatically.
-    const returnUrl = `${appUrl}/dashboard/credits?purchase_id=${purchase.id}`;
-    const cancelUrl = `${appUrl}/dashboard/credits?dodo_cancel=true&purchase_id=${purchase.id}`;
+    //    We use an explicit `payment=pending|cancelled` param that WE control,
+    //    rather than relying on Dodo to preserve a custom `dodo_cancel` boolean.
+    //    Dodo also auto-appends `?status=...&payment_id=...` to the return_url.
+    const appUrl = process.env.APP_URL
+      || `${req.get('x-forwarded-proto') || req.protocol}://${req.get('x-forwarded-host') || req.get('host')}`;
+    const returnUrl = `${appUrl}/dashboard/credits?payment=pending&purchase_id=${purchase.id}`;
+    const cancelUrl = `${appUrl}/dashboard/credits?payment=cancelled&purchase_id=${purchase.id}`;
 
     // ── 5. Create Dodo checkout session ───────────────────────────────────────
     const dodo = await getDodoClient();
