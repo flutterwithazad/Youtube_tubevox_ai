@@ -1,13 +1,14 @@
 import { useLocation } from "wouter";
 import { DashboardShell } from "@/components/layout/DashboardShell";
-import { Zap, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2, PlayCircle } from "lucide-react";
+import { Zap, ArrowDownRight, ShieldCheck, RefreshCw, X, CheckCircle2, Loader2, PlayCircle, AlertCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useCredits } from "@/hooks/use-credits";
 import { supabase } from "@/lib/supabase";
 import { formatDistanceToNow } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
+
 
 interface CreditPackage {
   id: string;
@@ -52,20 +53,32 @@ interface GroupedJobTx {
 const JOBS_PER_PAGE = 10;
 const CREDITS_PER_PAGE = 10;
 
+// Payment poll state
+type PollState = 'idle' | 'polling' | 'completed' | 'failed' | 'cancelled' | 'timeout';
+
 export default function Credits() {
   const [location] = useLocation();
-  const searchParams = new URLSearchParams(window.location.search);
-  const paymentStatus = searchParams.get('payment');
+
+  // URL params are read inside the payment-return useEffect (below).
+  // We intentionally do NOT read them here at render time — the useEffect
+  // reads them, acts on them, then immediately clears them from the URL.
 
   const { user } = useAuth();
   const { balance, loading: balanceLoading, refetch } = useCredits(user?.id);
 
-  const [packages,       setPackages]       = useState<CreditPackage[]>([]);
-  const [purchaseHistory, setPurchaseHistory] = useState<any[]>([]);
-  const [freeCredits,    setFreeCredits]    = useState<string>("...");
+  const [packages,        setPackages]        = useState<CreditPackage[]>([]);
+  const [purchaseHistory,  setPurchaseHistory]  = useState<any[]>([]);
+  const [freeCredits,     setFreeCredits]     = useState<string>("...");
   const [packagesLoading, setPackagesLoading] = useState(true);
-  const [confirmPkg,     setConfirmPkg]     = useState<CreditPackage | null>(null);
-  const [buying,         setBuying]         = useState(false);
+  const [confirmPkg,      setConfirmPkg]      = useState<CreditPackage | null>(null);
+  const [buying,          setBuying]          = useState(false);
+
+  // Payment polling UI state
+  const [pollState,   setPollState]   = useState<PollState>('idle');
+  const pollTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollCountRef  = useRef(0);
+  const MAX_POLLS     = 18;   // 18 × 2 s = 36 s max
+  const POLL_INTERVAL = 2000; // ms
 
   // Transaction history state
   const [historyLoading,   setHistoryLoading]   = useState(true);
@@ -93,25 +106,144 @@ export default function Credits() {
     fetchPurchaseHistory();
   }, []);
 
+  // ── Payment return handler ────────────────────────────────────────────────
+  //
+  // Our backend sets an explicit `payment=pending|cancelled` param on the
+  // redirect URLs it passes to Dodo so we always know which path we're on:
+  //   return_url  → payment=pending   (Dodo also appends status=succeeded/failed)
+  //   cancel_url  → payment=cancelled (user clicked "back" / "cancel" at checkout)
+  //
+  // We NEVER trust a URL param alone to confirm success — we poll the real
+  // purchase row and wait for the webhook to flip the status.
+  //
   useEffect(() => {
-    if (paymentStatus === 'success') {
-      toast.success('Payment successful! Your credits will appear shortly.', {
-        duration: 8000,
-      });
-      // Clear params from URL without reload
-      const url = new URL(window.location.href);
-      url.searchParams.delete('payment');
-      url.searchParams.delete('pkg');
-      window.history.replaceState({}, '', url.pathname);
-      
-      const timer = setTimeout(() => {
-        refetch();
-        fetchHistory();
-        fetchPurchaseHistory();
-      }, 3000);
-      return () => clearTimeout(timer);
+    // 1. Process flags BEFORE clearing URL
+    const params = new URLSearchParams(window.location.search);
+    const paymentParam = params.get('payment');     // 'pending' | 'cancelled' — set by us
+    const dodoStatus   = params.get('status');      // 'succeeded'|'failed'|etc — appended by Dodo
+    const purchaseId   = params.get('purchase_id'); // our purchase row UUID
+
+    if (paymentParam === 'cancelled') {
+      // User clicked "Cancel payment" on Dodo's checkout page
+      setPollState('cancelled');
+      toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
+      if (purchaseId) {
+        // Mark as cancelled in DB so history shows ✗ instead of spinning
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          fetch(`/api/payments/purchase/${purchaseId}/cancel`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
+          })
+          .then(() => fetchPurchaseHistory())
+          .catch(() => {});
+        });
+      }
+    } else if (paymentParam === 'pending') {
+      // Returned from Dodo checkout — check what Dodo says happened
+      if (dodoStatus === 'failed') {
+        // Dodo appended status=failed — payment declined / error at gateway
+        setPollState('failed');
+        toast.error('Payment failed. Please try again or use a different payment method.');
+        if (purchaseId) {
+          // Mark as failed in DB so history shows ✗ instead of spinning
+          supabase.auth.getSession().then(({ data: { session } }) => {
+            fetch(`/api/payments/purchase/${purchaseId}/fail`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
+            })
+            .then(() => fetchPurchaseHistory())
+            .catch(() => {});
+          });
+        }
+      } else if (purchaseId) {
+        // status=succeeded or unknown — poll the DB and wait for webhook
+        setPollState('polling');
+        pollCountRef.current = 0;
+        startPolling(purchaseId);
+      }
     }
-  }, [paymentStatus]);
+
+    // 2. Clear URL params so a refresh doesn't re-trigger the logic
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('payment');
+    cleanUrl.searchParams.delete('status');
+    cleanUrl.searchParams.delete('purchase_id');
+    cleanUrl.searchParams.delete('payment_id');
+    window.history.replaceState({}, '', cleanUrl.pathname);
+
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function startPolling(purchaseId: string) {
+    async function poll() {
+      try {
+        const { data, error } = await supabase
+          .from('package_purchases')
+          .select('payment_status, credits_total')
+          .eq('id', purchaseId)
+          .single();
+
+        if (error) throw error;
+
+        const status = data?.payment_status as string;
+
+        if (status === 'completed') {
+          setPollState('completed');
+          toast.success(
+            `Payment successful! ${(data.credits_total ?? 0).toLocaleString()} credits have been added to your account.`,
+            { duration: 8000 },
+          );
+          refetch();
+          fetchHistory();
+          fetchPurchaseHistory();
+          return;
+        }
+
+        if (status === 'failed') {
+          setPollState('failed');
+          toast.error('Payment failed. Please try again or use a different payment method.', { duration: 8000 });
+          fetchPurchaseHistory();
+          return;
+        }
+
+        if (status === 'cancelled') {
+          setPollState('cancelled');
+          toast.info('Payment was cancelled. No charges were made.', { duration: 6000 });
+          fetchPurchaseHistory();
+          return;
+        }
+
+        // Still pending — keep polling
+        pollCountRef.current += 1;
+        if (pollCountRef.current >= MAX_POLLS) {
+          setPollState('timeout');
+          toast.info(
+            'Your payment is still being confirmed. Credits will appear in your account shortly — no action needed.',
+            { duration: 12000 },
+          );
+          refetch();
+          fetchPurchaseHistory();
+          return;
+        }
+
+        pollTimerRef.current = setTimeout(poll, POLL_INTERVAL);
+      } catch {
+        // Network error — retry silently
+        pollCountRef.current += 1;
+        if (pollCountRef.current < MAX_POLLS) {
+          pollTimerRef.current = setTimeout(poll, POLL_INTERVAL);
+        } else {
+          setPollState('timeout');
+        }
+      }
+    }
+
+    // Give Dodo's webhook a 2-second head-start before the first poll
+    pollTimerRef.current = setTimeout(poll, 2000);
+  }
 
   const fetchFreeCredits = async () => {
     try {
@@ -268,6 +400,51 @@ export default function Credits() {
         <h2 className="text-3xl font-display font-bold text-foreground">Credit Balance</h2>
         <p className="text-muted-foreground mt-1">Manage your credits and view transaction history.</p>
       </div>
+
+      {/* Payment Status Banner */}
+      {pollState === 'polling' && (
+        <div className="flex items-center gap-3 bg-primary/10 border border-primary/20 text-primary rounded-xl px-5 py-4 mb-6">
+          <Loader2 className="w-5 h-5 animate-spin flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">Confirming your payment…</p>
+            <p className="text-xs text-primary/70 mt-0.5">This usually takes a few seconds. Please don't close this page.</p>
+          </div>
+        </div>
+      )}
+
+      {pollState === 'completed' && (
+        <div className="flex items-center gap-3 bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 rounded-xl px-5 py-4 mb-6">
+          <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+          <p className="font-semibold text-sm">Payment confirmed! Your credits have been added.</p>
+        </div>
+      )}
+
+      {pollState === 'failed' && (
+        <div className="flex items-center gap-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-xl px-5 py-4 mb-6">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">Payment failed</p>
+            <p className="text-xs opacity-80 mt-0.5">No charges were made. Please try again or use a different payment method.</p>
+          </div>
+        </div>
+      )}
+
+      {pollState === 'cancelled' && (
+        <div className="flex items-center gap-3 bg-muted border border-border text-muted-foreground rounded-xl px-5 py-4 mb-6">
+          <X className="w-5 h-5 flex-shrink-0" />
+          <p className="font-semibold text-sm">Payment cancelled. No charges were made.</p>
+        </div>
+      )}
+
+      {pollState === 'timeout' && (
+        <div className="flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 rounded-xl px-5 py-4 mb-6">
+          <Clock className="w-5 h-5 flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">Payment is still being processed</p>
+            <p className="text-xs opacity-80 mt-0.5">Your credits will appear automatically once the payment clears. Check back in a moment.</p>
+          </div>
+        </div>
+      )}
 
       {/* Balance Card */}
       <div className="bg-gradient-to-br from-card to-secondary border border-border rounded-2xl p-6 sm:p-8 shadow-sm mb-10 relative overflow-hidden">
@@ -491,39 +668,93 @@ export default function Credits() {
                  No purchases yet.
                </div>
             ) : (
-              purchaseHistory.map(p => (
-                <div key={p.id} className="flex items-center justify-between p-4 border-b border-border/50 last:border-0 hover:bg-secondary/30 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                      p.payment_status === 'completed' ? 'bg-green-100 text-green-600' :
-                      p.payment_status === 'failed'    ? 'bg-red-100 text-red-600'   : 'bg-amber-100 text-amber-600'
-                    }`}>
-                      {p.payment_status === 'completed' ? (
-                        <CheckCircle2 className="w-4 h-4" />
-                      ) : p.payment_status === 'failed' ? (
-                        <X className="w-4 h-4" />
-                      ) : (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      )}
+              purchaseHistory.map(p => {
+                // A pending purchase older than 15 min is "abandoned" — the user
+                // never completed checkout or Dodo didn't fire a webhook.
+                const ABANDONED_MS = 15 * 60 * 1000;
+                const isAbandoned =
+                  p.payment_status === 'pending' &&
+                  Date.now() - new Date(p.created_at).getTime() > ABANDONED_MS;
+
+                const effectiveStatus = isAbandoned ? 'abandoned' : p.payment_status;
+
+                const iconBg =
+                  effectiveStatus === 'completed'  ? 'bg-green-100 text-green-600'                   :
+                  effectiveStatus === 'failed'     ? 'bg-red-100 text-red-600'                       :
+                  effectiveStatus === 'cancelled'  ? 'bg-muted text-muted-foreground'                :
+                  effectiveStatus === 'abandoned'  ? 'bg-muted text-muted-foreground'                :
+                  /* pending */                      'bg-amber-100 text-amber-600';
+
+                const icon =
+                  effectiveStatus === 'completed'  ? <CheckCircle2 className="w-4 h-4" />            :
+                  effectiveStatus === 'failed'     ? <X className="w-4 h-4" />                       :
+                  effectiveStatus === 'cancelled'  ? <X className="w-4 h-4" />                       :
+                  effectiveStatus === 'abandoned'  ? <Clock className="w-4 h-4" />                   :
+                  /* pending */                      <Loader2 className="w-4 h-4 animate-spin" />;
+
+                const statusLabel =
+                  effectiveStatus === 'completed'  ? null          :
+                  effectiveStatus === 'failed'     ? 'Failed'      :
+                  effectiveStatus === 'cancelled'  ? 'Cancelled'   :
+                  effectiveStatus === 'abandoned'  ? 'Expired'     :
+                  /* pending */                      'Processing…';
+
+                const badgeStyles =
+                  effectiveStatus === 'failed'     ? 'bg-red-50 text-red-600 border-red-100' :
+                  effectiveStatus === 'pending'    ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                                                     'bg-secondary/50 text-muted-foreground border-border/50';
+
+                const dateObj = new Date(p.created_at);
+                const localDate = dateObj.toLocaleDateString(undefined, { 
+                  month: 'short', 
+                  day: 'numeric', 
+                  year: 'numeric' 
+                });
+                const localTime = dateObj.toLocaleTimeString(undefined, { 
+                  hour: '2-digit', 
+                  minute: '2-digit' 
+                });
+
+                return (
+                  <div key={p.id} className="flex items-center justify-between p-4 border-b border-border/40 last:border-0 hover:bg-secondary/20 transition-all group">
+                    <div className="flex items-center gap-4">
+                      {/* Status Icon */}
+                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-105 ${iconBg}`}>
+                        {icon}
+                      </div>
+                      
+                      {/* Name and Date */}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">{p.credit_packages?.name || 'Manual Credit'}</p>
+                          {statusLabel && (
+                             <div className={`px-1.5 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider ${badgeStyles}`}>
+                               {statusLabel}
+                             </div>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground/80 mt-0.5">
+                          {localDate} • {localTime}
+                          {p.dodo_payment_id && (
+                            <span className="ml-2 font-mono text-[9px] opacity-60">#{p.dodo_payment_id.slice(-8)}</span>
+                          )}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{p.credit_packages?.name}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {formatDistanceToNow(new Date(p.created_at), { addSuffix: true })}
-                        {p.dodo_payment_id && (
-                          <span className="ml-2 font-mono">#{p.dodo_payment_id.slice(-8)}</span>
-                        )}
+
+                    {/* Quantity and Price */}
+                    <div className="text-right">
+                      <p className={`text-sm font-bold font-mono ${effectiveStatus === 'completed' ? 'text-primary' : 'text-muted-foreground/60'}`}>
+                        {effectiveStatus === 'completed' ? '+' : ''}{p.credits_total?.toLocaleString()}
+                        <span className="text-[10px] ml-1 font-sans font-medium opacity-70">credits</span>
+                      </p>
+                      <p className="text-[10px] font-medium text-muted-foreground/60 mt-0.5">
+                        ${p.price_paid} {p.currency}
                       </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold font-mono text-foreground">
-                      +{p.credits_total?.toLocaleString()} credits
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">${p.price_paid} {p.currency}</p>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>

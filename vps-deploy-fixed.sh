@@ -18,10 +18,11 @@ $SSH_CMD << 'DEPLOY_EOF'
   cd /var/www/Youtube_tubevox_ai
   
   # Step 1: Pull latest code
-  echo "📥 Step 1: Pulling latest code from git..."
-  git pull origin azad
+  echo "📥 Step 1: Pulling latest code from git (Forced)..."
+  git fetch origin azad
+  git reset --hard origin/azad
   
-  # Step 2: Load environment
+  # Step 2: Load g9T3X88orBfsUV
   echo "🔧 Step 2: Loading environment variables..."
   export $(cat .env | grep -v '^#' | xargs)
   
@@ -29,12 +30,16 @@ $SSH_CMD << 'DEPLOY_EOF'
   echo "📦 Step 3: Updating dependencies..."
   pnpm install
   
-  # Step 4: Rebuild API Server
-  echo "🔨 Step 4: Rebuilding API Server..."
+  # Step 4: Clean old builds (to force fresh assets)
+  echo "🧹 Step 4: Cleaning old builds..."
+  rm -rf artifacts/dashboard/dist artifacts/admin/dist artifacts/tubevox-landing/dist artifacts/api-server/dist
+  
+  # Step 5: Rebuild API Server
+  echo "🔨 Step 5: Rebuilding API Server..."
   pnpm --filter @workspace/api-server run build
   
-  # Step 5: Rebuild Frontend Panels (React/Vite)
-  echo "🔨 Step 5: Rebuilding Frontend Panels..."
+  # Step 6: Rebuild Frontend Panels (React/Vite)
+  echo "🔨 Step 6: Rebuilding Frontend Panels..."
   
   echo "  → Dashboard..."
   PORT=3000 pnpm --filter @workspace/dashboard run build
@@ -45,23 +50,23 @@ $SSH_CMD << 'DEPLOY_EOF'
   echo "  → Landing Page..."
   PORT=3002 pnpm --filter @workspace/tubevox-landing run build
   
-  # Step 6: Restart services via PM2
-  echo "♻️  Step 6: Restarting all services..."
+  # Step 7: Restart services via PM2
+  echo "♻️  Step 7: Restarting all services..."
   pm2 restart ecosystem.config.js --env production
   
   echo "⏳ Waiting for services to stabilize..."
   sleep 5
   pm2 status
   
-  # Step 7: Final Verification
+  # Step 8: Final Verification
   echo ""
-  echo "✅ Step 7: Verifying services..."
+  echo "✅ Step 8: Verifying services..."
   echo ""
   
   # Check local ports on VPS
   curl -s -o /dev/null -w "Landing (3002): %{http_code}\n" http://localhost:3002
-  curl -s -o /dev/null -w "Dashboard (3000): %{http_code}\n" http://localhost:3000
-  curl -s -o /dev/null -w "Admin (3001): %{http_code}\n" http://localhost:3001
+  curl -s -o /dev/null -w "Dashboard (3000): %{http_code}\n" http://localhost:3000/dashboard/
+  curl -s -o /dev/null -w "Admin (3001): %{http_code}\n" http://localhost:3001/admin/
   curl -s -o /dev/null -w "API Server (8080): %{http_code}\n" http://localhost:8080/api/healthz
   
 DEPLOY_EOF
