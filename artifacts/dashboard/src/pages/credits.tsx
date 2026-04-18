@@ -122,18 +122,33 @@ export default function Credits() {
     const purchaseId = params.get('purchase_id');
 
     if (dodoCancel || dodoStatus === 'cancelled') {
+      setPollState('cancelled');
       toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
       if (purchaseId) {
+        // Mark as cancelled in DB so history shows ✗ instead of spinning
         supabase.auth.getSession().then(({ data: { session } }) => {
-          fetch('/api/payments/purchase/' + purchaseId + '/cancel', {
+          fetch(`/api/payments/purchase/${purchaseId}/cancel`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
-          }).catch(() => {});
+          })
+          .then(() => fetchPurchaseHistory())
+          .catch(() => {});
         });
       }
     } else if (dodoStatus === 'failed') {
       setPollState('failed');
       toast.error('Payment failed. Please try again or use a different payment method.');
+      if (purchaseId) {
+        // Mark as failed in DB so history shows ✗ instead of spinning
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          fetch(`/api/payments/purchase/${purchaseId}/fail`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
+          })
+          .then(() => fetchPurchaseHistory())
+          .catch(() => {});
+        });
+      }
     } else if (purchaseId) {
       setPollState('polling');
       pollCountRef.current = 0;
@@ -644,39 +659,65 @@ export default function Credits() {
                  No purchases yet.
                </div>
             ) : (
-              purchaseHistory.map(p => (
-                <div key={p.id} className="flex items-center justify-between p-4 border-b border-border/50 last:border-0 hover:bg-secondary/30 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                      p.payment_status === 'completed' ? 'bg-green-100 text-green-600' :
-                      p.payment_status === 'failed'    ? 'bg-red-100 text-red-600'   : 'bg-amber-100 text-amber-600'
-                    }`}>
-                      {p.payment_status === 'completed' ? (
-                        <CheckCircle2 className="w-4 h-4" />
-                      ) : p.payment_status === 'failed' ? (
-                        <X className="w-4 h-4" />
-                      ) : (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{p.credit_packages?.name}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {formatDistanceToNow(new Date(p.created_at), { addSuffix: true })}
-                        {p.dodo_payment_id && (
-                          <span className="ml-2 font-mono">#{p.dodo_payment_id.slice(-8)}</span>
+              purchaseHistory.map(p => {
+                // A pending purchase older than 15 min is "abandoned" — the user
+                // never completed checkout or Dodo didn't fire a webhook.
+                const ABANDONED_MS = 15 * 60 * 1000;
+                const isAbandoned =
+                  p.payment_status === 'pending' &&
+                  Date.now() - new Date(p.created_at).getTime() > ABANDONED_MS;
+
+                const effectiveStatus = isAbandoned ? 'abandoned' : p.payment_status;
+
+                const iconBg =
+                  effectiveStatus === 'completed'  ? 'bg-green-100 text-green-600'                   :
+                  effectiveStatus === 'failed'     ? 'bg-red-100 text-red-600'                       :
+                  effectiveStatus === 'cancelled'  ? 'bg-muted text-muted-foreground'                :
+                  effectiveStatus === 'abandoned'  ? 'bg-muted text-muted-foreground'                :
+                  /* pending */                      'bg-amber-100 text-amber-600';
+
+                const icon =
+                  effectiveStatus === 'completed'  ? <CheckCircle2 className="w-4 h-4" />            :
+                  effectiveStatus === 'failed'     ? <X className="w-4 h-4" />                       :
+                  effectiveStatus === 'cancelled'  ? <X className="w-4 h-4" />                       :
+                  effectiveStatus === 'abandoned'  ? <Clock className="w-4 h-4" />                   :
+                  /* pending */                      <Loader2 className="w-4 h-4 animate-spin" />;
+
+                const statusLabel =
+                  effectiveStatus === 'completed'  ? null                                             :
+                  effectiveStatus === 'failed'     ? <span className="text-red-500">Failed</span>    :
+                  effectiveStatus === 'cancelled'  ? <span className="text-muted-foreground">Cancelled</span> :
+                  effectiveStatus === 'abandoned'  ? <span className="text-muted-foreground">Expired</span>   :
+                  /* pending */                      <span className="text-amber-600">Processing…</span>;
+
+                return (
+                  <div key={p.id} className="flex items-center justify-between p-4 border-b border-border/50 last:border-0 hover:bg-secondary/30 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${iconBg}`}>
+                        {icon}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-foreground">{p.credit_packages?.name}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {formatDistanceToNow(new Date(p.created_at), { addSuffix: true })}
+                          {p.dodo_payment_id && (
+                            <span className="ml-2 font-mono">#{p.dodo_payment_id.slice(-8)}</span>
+                          )}
+                        </p>
+                        {statusLabel && (
+                          <p className="text-[10px] font-medium mt-0.5">{statusLabel}</p>
                         )}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-sm font-semibold font-mono ${effectiveStatus === 'completed' ? 'text-foreground' : 'text-muted-foreground'}`}>
+                        +{p.credits_total?.toLocaleString()} credits
                       </p>
+                      <p className="text-[10px] text-muted-foreground">${p.price_paid} {p.currency}</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold font-mono text-foreground">
-                      +{p.credits_total?.toLocaleString()} credits
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">${p.price_paid} {p.currency}</p>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>

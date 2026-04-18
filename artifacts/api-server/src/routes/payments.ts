@@ -179,28 +179,61 @@ router.get('/purchase/:id/status', async (req, res) => {
   }
 });
 
-router.post('/cancel', async (req: any, res) => {
-  const { purchase_id } = req.body;
-  const userId = req.user?.id;
-
-  if (!purchase_id) return res.status(400).json({ error: 'Missing purchase_id' });
-
+// ─── CANCEL PURCHASE ──────────────────────────────────────────────────────────
+// Called by the frontend when Dodo redirects to cancel_url.
+// Marks the pending purchase as cancelled so it doesn't spin forever in history.
+router.post('/purchase/:id/cancel', async (req, res) => {
   try {
+    const user = await resolveUser(req, res);
+    if (!user) return;
+
     const supabase = createSupabaseAdmin();
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('package_purchases')
       .update({ payment_status: 'cancelled' })
-      .eq('id', purchase_id)
-      .eq('user_id', userId)
-      .eq('payment_status', 'pending')
-      .select()
-      .single();
+      .eq('id', req.params.id)
+      .eq('user_id', user.id)
+      .eq('payment_status', 'pending'); // only update if still pending
 
-    if (error) throw error;
-    res.json({ success: true, data });
+    if (error) {
+      console.error('[CANCEL] DB error:', error.message);
+      return res.status(500).json({ error: 'Failed to cancel purchase' });
+    }
+
+    console.log(`[CANCEL] purchase=${req.params.id} user=${user.id} → cancelled`);
+    return res.json({ success: true });
   } catch (err: any) {
-    console.error('[CANCEL ERROR]', err.message);
-    res.status(500).json({ error: 'Failed to cancel purchase' });
+    console.error('[CANCEL] Unexpected error:', err.message);
+    return res.status(500).json({ error: 'Failed to cancel purchase' });
+  }
+});
+
+// ─── MARK PURCHASE FAILED ─────────────────────────────────────────────────────
+// Called by the frontend when Dodo appends status=failed to the return_url.
+// Updates the DB so the history row shows a red ✗ instead of spinning forever.
+router.post('/purchase/:id/fail', async (req, res) => {
+  try {
+    const user = await resolveUser(req, res);
+    if (!user) return;
+
+    const supabase = createSupabaseAdmin();
+    const { error } = await supabase
+      .from('package_purchases')
+      .update({ payment_status: 'failed' })
+      .eq('id', req.params.id)
+      .eq('user_id', user.id)
+      .eq('payment_status', 'pending'); // only update if still pending
+
+    if (error) {
+      console.error('[FAIL] DB error:', error.message);
+      return res.status(500).json({ error: 'Failed to update purchase' });
+    }
+
+    console.log(`[FAIL] purchase=${req.params.id} user=${user.id} → failed`);
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error('[FAIL] Unexpected error:', err.message);
+    return res.status(500).json({ error: 'Failed to update purchase' });
   }
 });
 
