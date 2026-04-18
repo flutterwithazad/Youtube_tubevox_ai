@@ -66,10 +66,13 @@ function Router() {
       </Route>
 
       <Route path="/">
-        {() => {
-          window.location.replace("/dashboard/login");
-          return null;
-        }}
+        <AuthGuard>
+          {() => {
+            const [_, setLocation] = useLocation();
+            useEffect(() => { setLocation("/scrape"); }, [setLocation]);
+            return null;
+          }}
+        </AuthGuard>
       </Route>
       <Route path="/scrape">
         <AuthGuard><Scrape /></AuthGuard>
