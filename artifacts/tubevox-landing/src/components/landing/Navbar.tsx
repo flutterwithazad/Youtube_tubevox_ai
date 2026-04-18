@@ -49,9 +49,9 @@ export function Navbar() {
 
         {/* Desktop CTAs */}
         <div className="hidden md:flex items-center gap-4">
-          <a href="/login" className="text-sm font-semibold hover:text-primary transition-colors">Log in</a>
+          <a href="/dashboard/" className="text-sm font-semibold hover:text-primary transition-colors">Log in</a>
           <a 
-            href="/signup" 
+            href="/dashboard/signup" 
             className="text-sm font-bold bg-primary text-primary-foreground px-5 py-2.5 rounded-full shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/30 hover:-translate-y-0.5 transition-all active:translate-y-0"
           >
             Start for free →
@@ -75,8 +75,8 @@ export function Navbar() {
           <button onClick={() => scrollTo('pricing')} className="text-left font-medium p-2">Pricing</button>
           <button onClick={() => scrollTo('faq')} className="text-left font-medium p-2">FAQ</button>
           <hr className="border-border" />
-          <a href="/login" className="font-semibold p-2">Log in</a>
-          <a href="/signup" className="w-full text-center font-bold bg-primary text-primary-foreground px-5 py-3 rounded-xl shadow-md">
+          <a href="/dashboard/" className="font-semibold p-2">Log in</a>
+          <a href="/dashboard/signup" className="w-full text-center font-bold bg-primary text-primary-foreground px-5 py-3 rounded-xl shadow-md">
             Start for free →
           </a>
         </div>

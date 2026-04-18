@@ -66,13 +66,18 @@ function Router() {
       </Route>
 
       <Route path="/">
-        <AuthGuard>
-          {() => {
-            const [_, setLocation] = useLocation();
-            useEffect(() => { setLocation("/scrape"); }, [setLocation]);
-            return null;
-          }}
-        </AuthGuard>
+        {() => {
+          const { user, isLoading } = useAuth();
+          const [_, setLocation] = useLocation();
+          
+          useEffect(() => {
+            if (isLoading) return;
+            if (user) setLocation("/scrape");
+            else setLocation("/login");
+          }, [user, isLoading, setLocation]);
+          
+          return null;
+        }}
       </Route>
       <Route path="/scrape">
         <AuthGuard><Scrape /></AuthGuard>
