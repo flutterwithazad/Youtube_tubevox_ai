@@ -20,6 +20,22 @@ import { useEffect } from "react";
 
 const queryClient = new QueryClient();
 
+// Must be a named component — NOT an inline arrow function inside <Route>.
+// Inline functions get a new reference every render, making React think it's a
+// different component each time and throwing "Rendered fewer hooks than expected".
+function RootRedirect() {
+  const { user, isLoading } = useAuth();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (user) setLocation("/scrape");
+    else setLocation("/login");
+  }, [user, isLoading, setLocation]);
+
+  return null;
+}
+
 function AuthGuard({ children, requireAuth = true }: { children: React.ReactNode, requireAuth?: boolean }) {
   const { user, profile, isLoading } = useAuth();
   const [location, setLocation] = useLocation();
@@ -66,18 +82,7 @@ function Router() {
       </Route>
 
       <Route path="/">
-        {() => {
-          const { user, isLoading } = useAuth();
-          const [_, setLocation] = useLocation();
-          
-          useEffect(() => {
-            if (isLoading) return;
-            if (user) setLocation("/scrape");
-            else setLocation("/login");
-          }, [user, isLoading, setLocation]);
-          
-          return null;
-        }}
+        <RootRedirect />
       </Route>
       <Route path="/scrape">
         <AuthGuard><Scrape /></AuthGuard>
