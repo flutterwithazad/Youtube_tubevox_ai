@@ -8,6 +8,7 @@ import { useCredits } from "@/hooks/use-credits";
 import { supabase } from "@/lib/supabase";
 import { formatDistanceToNow } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
+import { api } from "@/lib/api";
 
 interface CreditPackage {
   id: string;
@@ -114,34 +115,33 @@ export default function Credits() {
   // purchase row in the database until it reaches a terminal state.
   //
   useEffect(() => {
+    // 1. Process flags BEFORE clearing URL
+    const params = new URLSearchParams(window.location.search);
+    const dodoCancel = params.get('dodo_cancel') === 'true';
+    const dodoStatus = params.get('status');
+    const purchaseId = params.get('purchase_id');
+
+    if (dodoCancel || dodoStatus === 'cancelled') {
+      toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
+      if (purchaseId) {
+        api.post('/payments/cancel', { purchase_id: purchaseId }).catch(() => {});
+      }
+    } else if (dodoStatus === 'failed') {
+      setPollState('failed');
+      toast.error('Payment failed. Please try again or use a different payment method.');
+    } else if (purchaseId) {
+      setPollState('polling');
+      pollCountRef.current = 0;
+      startPolling(purchaseId);
+    }
+
+    // 2. Clear URL safely
     const cleanUrl = new URL(window.location.href);
     cleanUrl.searchParams.delete('status');
     cleanUrl.searchParams.delete('purchase_id');
     cleanUrl.searchParams.delete('dodo_cancel');
     cleanUrl.searchParams.delete('payment_id');
     window.history.replaceState({}, '', cleanUrl.pathname);
-
-    if (urlDodoCancel === 'true' || urlDodoStatus === 'cancelled') {
-      toast.info('Payment cancelled. No charges were made.', { duration: 6000 });
-      // If we have the purchase ID, explicitly tell the backend to cancel it 
-      // so it stops showing as "pending" in the UI.
-      if (urlPurchaseId) {
-        api.post('/payments/cancel', { purchase_id: urlPurchaseId }).catch(() => {});
-      }
-      return;
-    }
-
-    if (urlDodoStatus === 'failed') {
-      setPollState('failed');
-      toast.error('Payment failed. Please try again or use a different payment method.');
-      return;
-    }
-
-    if (urlPurchaseId) {
-      setPollState('polling');
-      pollCountRef.current = 0;
-      startPolling(urlPurchaseId);
-    }
 
     return () => {
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
