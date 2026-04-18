@@ -693,36 +693,64 @@ export default function Credits() {
                   /* pending */                      <Loader2 className="w-4 h-4 animate-spin" />;
 
                 const statusLabel =
-                  effectiveStatus === 'completed'  ? null                                             :
-                  effectiveStatus === 'failed'     ? <span className="text-red-500">Failed</span>    :
-                  effectiveStatus === 'cancelled'  ? <span className="text-muted-foreground">Cancelled</span> :
-                  effectiveStatus === 'abandoned'  ? <span className="text-muted-foreground">Expired</span>   :
-                  /* pending */                      <span className="text-amber-600">Processing…</span>;
+                  effectiveStatus === 'completed'  ? null          :
+                  effectiveStatus === 'failed'     ? 'Failed'      :
+                  effectiveStatus === 'cancelled'  ? 'Cancelled'   :
+                  effectiveStatus === 'abandoned'  ? 'Expired'     :
+                  /* pending */                      'Processing…';
+
+                const badgeStyles =
+                  effectiveStatus === 'failed'     ? 'bg-red-50 text-red-600 border-red-100' :
+                  effectiveStatus === 'pending'    ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                                                     'bg-secondary/50 text-muted-foreground border-border/50';
+
+                const dateObj = new Date(p.created_at);
+                const localDate = dateObj.toLocaleDateString(undefined, { 
+                  month: 'short', 
+                  day: 'numeric', 
+                  year: 'numeric' 
+                });
+                const localTime = dateObj.toLocaleTimeString(undefined, { 
+                  hour: '2-digit', 
+                  minute: '2-digit' 
+                });
 
                 return (
-                  <div key={p.id} className="flex items-center justify-between p-4 border-b border-border/50 last:border-0 hover:bg-secondary/30 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${iconBg}`}>
+                  <div key={p.id} className="flex items-center justify-between p-4 border-b border-border/40 last:border-0 hover:bg-secondary/20 transition-all group">
+                    <div className="flex items-center gap-4">
+                      {/* Status Icon */}
+                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-105 ${iconBg}`}>
                         {icon}
                       </div>
+                      
+                      {/* Name and Date */}
                       <div>
-                        <p className="text-sm font-medium text-foreground">{p.credit_packages?.name}</p>
-                        <p className="text-[10px] text-muted-foreground">
-                          {formatDistanceToNow(new Date(p.created_at), { addSuffix: true })}
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">{p.credit_packages?.name || 'Manual Credit'}</p>
+                          {statusLabel && (
+                             <div className={`px-1.5 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider ${badgeStyles}`}>
+                               {statusLabel}
+                             </div>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground/80 mt-0.5">
+                          {localDate} • {localTime}
                           {p.dodo_payment_id && (
-                            <span className="ml-2 font-mono">#{p.dodo_payment_id.slice(-8)}</span>
+                            <span className="ml-2 font-mono text-[9px] opacity-60">#{p.dodo_payment_id.slice(-8)}</span>
                           )}
                         </p>
-                        {statusLabel && (
-                          <p className="text-[10px] font-medium mt-0.5">{statusLabel}</p>
-                        )}
                       </div>
                     </div>
+
+                    {/* Quantity and Price */}
                     <div className="text-right">
-                      <p className={`text-sm font-semibold font-mono ${effectiveStatus === 'completed' ? 'text-foreground' : 'text-muted-foreground'}`}>
-                        +{p.credits_total?.toLocaleString()} credits
+                      <p className={`text-sm font-bold font-mono ${effectiveStatus === 'completed' ? 'text-primary' : 'text-muted-foreground/60'}`}>
+                        {effectiveStatus === 'completed' ? '+' : ''}{p.credits_total?.toLocaleString()}
+                        <span className="text-[10px] ml-1 font-sans font-medium opacity-70">credits</span>
                       </p>
-                      <p className="text-[10px] text-muted-foreground">${p.price_paid} {p.currency}</p>
+                      <p className="text-[10px] font-medium text-muted-foreground/60 mt-0.5">
+                        ${p.price_paid} {p.currency}
+                      </p>
                     </div>
                   </div>
                 );
