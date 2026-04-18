@@ -76,17 +76,23 @@ const RENDER_PAGE = 300;
 
 // ── Highlighting Helper ───────────────────────────────────────────────────
 const Highlight = ({ text, query }: { text: string; query: string }) => {
-  if (!query || !text) return <>{text}</>;
-  const parts = text.split(new RegExp(`(${query.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi'));
-  return (
-    <>
-      {parts.map((part, i) => 
-        part.toLowerCase() === query.toLowerCase() 
-          ? <mark key={i} className="bg-yellow-200 text-yellow-900 rounded-px px-0.5">{part}</mark>
-          : part
-      )}
-    </>
-  );
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery || !text) return <>{text}</>;
+  
+  try {
+    const parts = text.split(new RegExp(`(${trimmedQuery.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi'));
+    return (
+      <>
+        {parts.map((part, i) => 
+          part.toLowerCase() === trimmedQuery.toLowerCase() 
+            ? <mark key={i} className="bg-yellow-200 text-yellow-900 rounded-px px-0.5">{part}</mark>
+            : part
+        )}
+      </>
+    );
+  } catch (e) {
+    return <>{text}</>;
+  }
 };
 
 // ── GreenCheck ──────────────────────────────────────────────────────────────
