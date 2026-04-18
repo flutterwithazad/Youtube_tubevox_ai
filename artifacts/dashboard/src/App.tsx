@@ -121,7 +121,7 @@ function MaintenanceGate({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+      <WouterRouter base="/dashboard">
         <MaintenanceGate>
           <Router />
         </MaintenanceGate>
