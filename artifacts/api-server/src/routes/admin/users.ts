@@ -45,10 +45,10 @@ router.get('/:id', async (req, res) => {
     const supabase = createSupabaseAdmin();
     const userId = req.params.id;
 
-    const [profileRes, ledgerRes, loginRes, authRes] = await Promise.all([
+    const [profileRes, balRes, loginRes, authRes] = await Promise.all([
       supabase.from('profiles').select('*,plans(name),subscriptions(*,plans(name))').eq('id', userId).single(),
-      // Real balance: sum all ledger amounts for this user
-      supabase.from('credit_ledger').select('amount').eq('user_id', userId),
+      // Use the database view for accurate balance (avoids API pagination limits)
+      supabase.from('user_credit_balance').select('balance').eq('user_id', userId).single(),
       // Last login: most recent successful login_history entry
       supabase.from('login_history').select('created_at').eq('user_id', userId).eq('success', true).order('created_at', { ascending: false }).limit(1),
       // Fallback: auth user last_sign_in_at
@@ -57,7 +57,7 @@ router.get('/:id', async (req, res) => {
 
     if (profileRes.error || !profileRes.data) return res.status(404).json({ error: 'User not found' });
 
-    const realBalance = (ledgerRes.data ?? []).reduce((sum, row) => sum + (row.amount ?? 0), 0);
+    const realBalance = balRes.data?.balance ?? 0;
     const lastLogin = loginRes.data?.[0]?.created_at ?? authRes.data?.user?.last_sign_in_at ?? null;
 
     const result = {
