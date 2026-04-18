@@ -65,8 +65,8 @@ $SSH_CMD << 'DEPLOY_EOF'
   
   # Check local ports on VPS
   curl -s -o /dev/null -w "Landing (3002): %{http_code}\n" http://localhost:3002
-  curl -s -o /dev/null -w "Dashboard (3000): %{http_code}\n" http://localhost:3000
-  curl -s -o /dev/null -w "Admin (3001): %{http_code}\n" http://localhost:3001
+  curl -s -o /dev/null -w "Dashboard (3000): %{http_code}\n" http://localhost:3000/dashboard/
+  curl -s -o /dev/null -w "Admin (3001): %{http_code}\n" http://localhost:3001/admin/
   curl -s -o /dev/null -w "API Server (8080): %{http_code}\n" http://localhost:8080/api/healthz
   
 DEPLOY_EOF
