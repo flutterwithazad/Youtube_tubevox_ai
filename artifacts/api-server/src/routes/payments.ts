@@ -376,10 +376,11 @@ async function handlePaymentSucceeded(payload: any, supabase: any) {
 
   // ── Mark purchase completed ───────────────────────────────────────────────
   const updateFields = {
-    payment_status:    'completed',
-    dodo_payment_id:   paymentId || null,
-    dodo_customer_id:  payload.data?.customer?.customer_id || null,
-    completed_at:      new Date().toISOString(),
+    payment_status:   'completed',
+    dodo_payment_id:  paymentId,
+    dodo_customer_id: payload.data?.customer?.customer_id,
+    completed_at:     new Date().toISOString(),
+    payment_metadata: payload.data, // Store full payload for deep analysis
   };
 
   if (purchaseId) {
@@ -427,16 +428,27 @@ async function handlePaymentFailed(payload: any, supabase: any) {
 
   if (!userId) return;
 
+  const dodoError = payload.data?.error || {};
+  const errorMessage = dodoError.message || 'Payment failed';
+  const errorCode    = dodoError.code || 'unknown';
+
+  const updateFields = {
+    payment_status:   'failed',
+    error_message:    errorMessage,
+    error_code:       errorCode,
+    payment_metadata: payload.data,
+  };
+
   if (purchaseId) {
     await supabase
       .from('package_purchases')
-      .update({ payment_status: 'failed' })
+      .update(updateFields)
       .eq('id', purchaseId)
       .eq('user_id', userId);
   } else {
     await supabase
       .from('package_purchases')
-      .update({ payment_status: 'failed' })
+      .update(updateFields)
       .match({ user_id: userId, package_id: packageId, payment_status: 'pending' });
   }
 

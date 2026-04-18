@@ -185,19 +185,62 @@ export default function UserDetailPage() {
         )}
 
         {tab === 'payments' && payments && (
-          <div className="space-y-6">
+          <div className="space-y-8">
             <div>
-              <h3 className="text-sm font-semibold mb-2">Purchases</h3>
-              {(payments.purchases ?? []).map((p: any) => (
-                <div key={p.id} className="flex items-center justify-between py-2 border-b border-gray-50 text-xs">
-                  <div><p className="font-medium">{p.credit_packages?.name}</p><p className="text-gray-400">{p.credits_total.toLocaleString()} credits · {p.payment_provider}</p></div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-semibold">${p.price_paid}</span>
-                    <StatusBadge status={p.payment_status} />
-                    {p.payment_status === 'completed' && <Button size="sm" variant="outline" className="text-xs h-6" onClick={async () => { if (confirm(`Refund $${p.price_paid}?`)) { await api.post(`/admin/payments/${p.id}/refund`); toast.success('Refunded'); api.get(`/admin/users/${id}/payments`).then(setPayments); } }}>Refund</Button>}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Purchase History</h3>
+                <span className="text-[10px] text-gray-400">Total: {(payments.purchases ?? []).length}</span>
+              </div>
+              <div className="space-y-3">
+                {(payments.purchases ?? []).map((p: any) => (
+                  <div key={p.id} className="p-3 border border-gray-100 rounded-xl hover:bg-gray-50/50 transition-colors">
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                           <p className="font-bold text-sm text-gray-900">{p.credit_packages?.name || 'Manual Credit'}</p>
+                           <StatusBadge status={p.payment_status} />
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-0.5">
+                          {new Date(p.created_at).toLocaleString()} · {p.payment_provider}
+                        </p>
+                      </div>
+                      <div className="text-right flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm">${p.price_paid}</span>
+                        {p.payment_status === 'completed' && (
+                          <Button size="sm" variant="outline" className="text-[10px] h-7 px-2" onClick={async () => { 
+                            if (confirm(`Refund $${p.price_paid}?`)) { 
+                              await api.post(`/admin/payments/${p.id}/refund`); 
+                              toast.success('Refunded'); 
+                              api.get(`/admin/users/${id}/payments`).then(setPayments); 
+                            } 
+                          }}>Refund</Button>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 pt-2 border-t border-gray-50">
+                       <div>
+                         <p className="text-[9px] text-gray-400 uppercase font-bold tracking-tighter">Credits</p>
+                         <p className="text-xs font-semibold text-gray-700">+{p.credits_total.toLocaleString()}</p>
+                       </div>
+                       <div>
+                         <p className="text-[9px] text-gray-400 uppercase font-bold tracking-tighter">Payment ID</p>
+                         <p className="text-xs font-mono text-gray-600 truncate">{p.dodo_payment_id || '—'}</p>
+                       </div>
+                       {p.payment_status === 'failed' && p.error_message && (
+                         <div className="col-span-2 mt-2 bg-red-50 p-2 rounded-lg border border-red-100">
+                           <p className="text-[9px] text-red-400 uppercase font-bold tracking-tighter italic">Failure Reason</p>
+                           <p className="text-[11px] text-red-700 font-medium">{p.error_message}</p>
+                           {p.error_code && <p className="text-[9px] text-red-400 font-mono mt-0.5">Code: {p.error_code}</p>}
+                         </div>
+                       )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+                {(payments.purchases ?? []).length === 0 && (
+                  <p className="text-sm text-gray-400 py-8 text-center bg-gray-50 rounded-xl border border-dashed">No purchase history found.</p>
+                )}
+              </div>
             </div>
             <div>
               <h3 className="text-sm font-semibold mb-2">Transactions</h3>
